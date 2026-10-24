@@ -1,0 +1,6 @@
+#pragma once
+
+#define VITOOL_VERSION_MAJOR 1
+#define VITOOL_VERSION_MINOR 0
+#define VITOOL_VERSION_PATCH 0
+#define VITOOL_VERSION_STRING "1.0.0"

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src https://api.github.com https://raw.githubusercontent.com">
+  <title>Vitool Box</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-button back" id="back" title="Back" hidden>
+      <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
+    </button>
+    <div class="brand">
+      <img src="logo.png" alt="">
+      <span>Vitool Box</span>
+    </div>
+    <input class="search" id="search" type="search" placeholder="Search apps" autocomplete="off">
+    <button class="icon-button" id="refresh" title="Refresh">
+      <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" /></svg>
+    </button>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main>
+    <section id="home">
+      <div class="filters" role="tablist">
+        <button class="chip active" data-filter="all">All apps</button>
+        <button class="chip" data-filter="installed">Installed</button>
+        <button class="chip" data-filter="updates">Updates</button>
+      </div>
+      <div class="grid" id="grid"></div>
+      <p class="empty" id="empty" hidden></p>
+    </section>
+
+    <section id="detail" hidden></section>
+  </main>
+
+  <div class="dialog-backdrop" id="dialog" hidden>
+    <div class="dialog" role="dialog" aria-modal="true">
+      <h2 id="dialog-title"></h2>
+      <p id="dialog-text"></p>
+      <div class="dialog-buttons">
+        <button class="button" id="dialog-cancel">Cancel</button>
+        <button class="button danger" id="dialog-ok"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="lightbox" id="lightbox" hidden><img alt=""></div>
+
+  <script src="app.js" charset="utf-8"></script>
+</body>
+</html>

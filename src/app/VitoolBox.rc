@@ -1,0 +1,32 @@
+#include <winres.h>
+#include "resource.h"
+#include "../version.h"
+
+IDI_APP ICON "../../assets/vitoolbox.ico"
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "VitoolBox.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION VITOOL_VERSION_MAJOR, VITOOL_VERSION_MINOR, VITOOL_VERSION_PATCH, 0
+PRODUCTVERSION VITOOL_VERSION_MAJOR, VITOOL_VERSION_MINOR, VITOOL_VERSION_PATCH, 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "VitomDev"
+            VALUE "FileDescription", "Vitool Box"
+            VALUE "FileVersion", VITOOL_VERSION_STRING
+            VALUE "InternalName", "VitoolBox"
+            VALUE "LegalCopyright", "Copyright (c) 2026 VitomDev"
+            VALUE "OriginalFilename", "VitoolBox.exe"
+            VALUE "ProductName", "Vitool Box"
+            VALUE "ProductVersion", VITOOL_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

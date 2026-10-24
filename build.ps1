@@ -1,0 +1,55 @@
+# Builds Vitool Box: VitoolBox.exe (with its web UI), the tests and the
+# VitoolBoxSetup.exe installer.
+#
+#   .\build.ps1                 Build everything and run the tests.
+#   .\build.ps1 -SkipTests      Build without running the tests.
+#   .\build.ps1 -SkipInstaller  Build the binaries only.
+#
+# Requirements: Visual Studio 2022 or newer with the C++ x64 tools and Inno
+# Setup 6. The Windows SDK, the WebView2 SDK, CMake and Ninja are downloaded
+# into .deps by scripts/fetch-deps.ps1.
+
+param(
+    [switch]$SkipTests,
+    [switch]$SkipInstaller
+)
+
+$ErrorActionPreference = 'Stop'
+$root = $PSScriptRoot
+$deps = Join-Path $root '.deps'
+$out = Join-Path $root 'build'
+$dist = Join-Path $root 'dist'
+
+& (Join-Path $root 'scripts\fetch-deps.ps1')
+. (Join-Path $root 'scripts\dev-env.ps1')
+
+function Invoke-Tool([string]$tool) {
+    # Tools print warnings on stderr; only the exit code decides failure.
+    $ErrorActionPreference = 'Continue'
+    & $tool @args 2>&1 | ForEach-Object { "$_" }
+    if ($LASTEXITCODE -ne 0) { throw "$tool failed with exit code $LASTEXITCODE" }
+}
+
+# --- VitoolBox.exe and the tests ------------------------------------------------
+
+Write-Host 'Building Vitool Box'
+$appBuild = Join-Path $out 'app'
+Invoke-Tool cmake -S $root -B $appBuild -G Ninja -DCMAKE_BUILD_TYPE=Release --log-level=WARNING -Wno-dev `
+    "-DVITOOL_WEBVIEW2_SDK=$(Join-Path $deps 'microsoft.web.webview2.1.0.2903.40')"
+Invoke-Tool cmake --build $appBuild
+
+if (-not $SkipTests) {
+    Write-Host 'Running tests'
+    Invoke-Tool (Join-Path $appBuild 'VitoolBoxTests.exe')
+}
+
+# --- Installer -------------------------------------------------------------------
+
+if (-not $SkipInstaller) {
+    $iscc = @("${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) { throw 'Inno Setup 6 was not found.' }
+    New-Item -ItemType Directory -Force $dist | Out-Null
+    Invoke-Tool $iscc /Q "/DBuildDir=$appBuild" "/O$dist" (Join-Path $root 'installer\VitoolBox.iss')
+    Write-Host "Installer: $dist\VitoolBoxSetup.exe"
+}
