@@ -46,6 +46,12 @@ if (-not $SkipTests) {
 # --- Installer -------------------------------------------------------------------
 
 if (-not $SkipInstaller) {
+    foreach ($file in Get-ChildItem (Join-Path $root 'src\ui') -File) {
+        $built = Join-Path $appBuild "ui\$($file.Name)"
+        if (-not (Test-Path $built) -or (Get-FileHash $built).Hash -ne (Get-FileHash $file.FullName).Hash) {
+            throw "The built UI is out of date: $($file.Name)"
+        }
+    }
     $iscc = @("${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
         Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $iscc) { throw 'Inno Setup 6 was not found.' }

@@ -34,9 +34,12 @@ target_link_libraries(VitoolBox PRIVATE vitoolcore user32 dwmapi version
 # The manifest is embedded through VitoolBox.rc.
 target_link_options(VitoolBox PRIVATE /MANIFEST:NO)
 
-# The web UI is served from a "ui" folder next to the executable.
-add_custom_command(TARGET VitoolBox POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/ui $<TARGET_FILE_DIR:VitoolBox>/ui)
+# The web UI is served from a "ui" folder next to the executable. Copied on
+# every build: a post-build step would only run when the exe is relinked.
+add_custom_target(VitoolBoxUi ALL
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/ui
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/ui ${CMAKE_BINARY_DIR}/ui)
+add_dependencies(VitoolBox VitoolBoxUi)
 
 add_executable(VitoolBoxTests tests/tests.cpp)
 target_link_libraries(VitoolBoxTests PRIVATE vitoolcore)
