@@ -139,4 +139,4 @@ Feel free to reach out or follow me:
 - 🐙 GitHub: [@VitomDev](https://github.com/VitomDev)
 - 🐦 Twitter/X: [@VitomDev](https://twitter.com/VitomDev)
 - 🎮 Twitch: [@VitomDev](https://www.twitch.tv/VitomDev)
-- 💼 LinkedIn: [Víctor Escós](https://www.linkedin.com/in/v%C3%ADctor-esc%C3%B3s-batalla/)
+- 💼 LinkedIn: [VitomDev](https://www.linkedin.com/in/víctor-escós-batalla/)
