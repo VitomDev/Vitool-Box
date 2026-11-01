@@ -33,6 +33,10 @@ target_link_libraries(VitoolBox PRIVATE vitoolcore user32 dwmapi version
     ${VITOOL_WEBVIEW2_SDK}/build/native/x64/WebView2LoaderStatic.lib)
 # The manifest is embedded through VitoolBox.rc.
 target_link_options(VitoolBox PRIVATE /MANIFEST:NO)
+# The resource compiler's includes are not tracked: rebuild the version info
+# and icon when they change.
+set_source_files_properties(src/app/VitoolBox.rc PROPERTIES OBJECT_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/version.h;${CMAKE_SOURCE_DIR}/src/app/VitoolBox.manifest;${CMAKE_SOURCE_DIR}/assets/vitoolbox.ico")
 
 # The web UI is served from a "ui" folder next to the executable. Copied on
 # every build: a post-build step would only run when the exe is relinked.
