@@ -6,6 +6,8 @@
 All VitomDev mini apps in one place. 📦  
 Browse the apps, read what each one does, and turn on the ones you want: Vitool Box downloads and installs them for you. Turn one off and it's uninstalled. New apps show up on their own.
 
+<p align="center"><img src="assets/screenshots/hub.png" width="760" alt="Vitool Box"></p>
+
 ---
 
 ## 🚀 Features
