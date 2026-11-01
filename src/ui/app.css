@@ -69,6 +69,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 
 .brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; margin-right: auto; }
 .brand img { width: 26px; height: 26px; }
+.brand-version { color: var(--text-muted); font-size: 12px; font-weight: 400; margin-left: -4px; }
+
+.credits { margin-top: 28px; font-size: 12px; }
+.credits a { color: var(--text-muted); text-decoration: none; }
+.credits a:hover { color: var(--accent); }
 
 .search {
   width: min(320px, 40vw);

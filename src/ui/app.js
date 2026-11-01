@@ -58,6 +58,7 @@ if (host) {
         state.hubVersion = message.version;
         state.startup = message.startup === '1';
         state.hidden = message.hidden === '1';
+        $('brand-version').textContent = `v${message.version}`;
         renderBanner();
         if (state.view === 'settings') renderSettings();
         scheduleChecks();
@@ -968,6 +969,7 @@ function openLightbox(src) {
 
 function applyLanguage() {
   setLanguage(state.settings.language);
+  $('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
   renderCategories();
   render();
   sendHostStrings();
@@ -978,6 +980,8 @@ function applyLanguage() {
 state.settings = readSettings();
 setLanguage(state.settings.language);
 $('sort').value = state.settings.sort;
+$('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
+$('credits').addEventListener('click', (event) => { event.preventDefault(); send({ type: 'openUrl', url: `https://github.com/${OWNER}` }); });
 $('back').addEventListener('click', showHome);
 $('open-settings').addEventListener('click', () => setView('settings'));
 $('update-all').addEventListener('click', updateAll);

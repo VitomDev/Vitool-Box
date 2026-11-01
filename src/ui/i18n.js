@@ -17,6 +17,7 @@ const LANGUAGES = {
 
 const STRINGS = {
   en: {
+    credits: 'Made by VitomDev',
     back: 'Back', search: 'Search apps', refresh: 'Refresh', settings: 'Settings',
     all: 'All apps', installed: 'Installed', updates: 'Updates', updateAll: 'Update all', select: 'Select several',
     allCategories: 'All categories', sortName: 'Name', sortNewest: 'Newest', sortUpdated: 'Recently updated', sortInstalled: 'Installed first',
@@ -72,6 +73,7 @@ const STRINGS = {
     'cat.Writing': 'Writing', 'cat.Tools': 'Tools',
   },
   es: {
+    credits: 'Hecho por VitomDev',
     back: 'Atrás', search: 'Buscar apps', refresh: 'Actualizar lista', settings: 'Ajustes',
     all: 'Todas', installed: 'Instaladas', updates: 'Actualizaciones', updateAll: 'Actualizar todo', select: 'Elegir varias',
     allCategories: 'Todas las categorías', sortName: 'Nombre', sortNewest: 'Más nuevas', sortUpdated: 'Actualizadas recientemente', sortInstalled: 'Instaladas primero',
@@ -127,6 +129,7 @@ const STRINGS = {
     'cat.Writing': 'Escritura', 'cat.Tools': 'Herramientas',
   },
   'pt-BR': {
+    credits: 'Feito por VitomDev',
     back: 'Voltar', search: 'Buscar apps', refresh: 'Atualizar lista', settings: 'Configurações',
     all: 'Todos', installed: 'Instalados', updates: 'Atualizações', updateAll: 'Atualizar tudo', select: 'Escolher vários',
     allCategories: 'Todas as categorias', sortName: 'Nome', sortNewest: 'Mais novos', sortUpdated: 'Atualizados recentemente', sortInstalled: 'Instalados primeiro',
@@ -182,6 +185,7 @@ const STRINGS = {
     'cat.Writing': 'Escrita', 'cat.Tools': 'Ferramentas',
   },
   fr: {
+    credits: 'Créé par VitomDev',
     back: 'Retour', search: 'Rechercher des applis', refresh: 'Actualiser', settings: 'Paramètres',
     all: 'Toutes', installed: 'Installées', updates: 'Mises à jour', updateAll: 'Tout mettre à jour', select: 'En choisir plusieurs',
     allCategories: 'Toutes les catégories', sortName: 'Nom', sortNewest: 'Plus récentes', sortUpdated: 'Mises à jour récemment', sortInstalled: 'Installées d’abord',
@@ -237,6 +241,7 @@ const STRINGS = {
     'cat.Writing': 'Écriture', 'cat.Tools': 'Outils',
   },
   de: {
+    credits: 'Erstellt von VitomDev',
     back: 'Zurück', search: 'Apps suchen', refresh: 'Aktualisieren', settings: 'Einstellungen',
     all: 'Alle Apps', installed: 'Installiert', updates: 'Updates', updateAll: 'Alle aktualisieren', select: 'Mehrere auswählen',
     allCategories: 'Alle Kategorien', sortName: 'Name', sortNewest: 'Neueste', sortUpdated: 'Zuletzt aktualisiert', sortInstalled: 'Installierte zuerst',
@@ -292,6 +297,7 @@ const STRINGS = {
     'cat.Writing': 'Schreiben', 'cat.Tools': 'Werkzeuge',
   },
   it: {
+    credits: 'Creato da VitomDev',
     back: 'Indietro', search: 'Cerca app', refresh: 'Aggiorna elenco', settings: 'Impostazioni',
     all: 'Tutte', installed: 'Installate', updates: 'Aggiornamenti', updateAll: 'Aggiorna tutto', select: 'Scegli più app',
     allCategories: 'Tutte le categorie', sortName: 'Nome', sortNewest: 'Più recenti', sortUpdated: 'Aggiornate di recente', sortInstalled: 'Prima le installate',
@@ -347,6 +353,7 @@ const STRINGS = {
     'cat.Writing': 'Scrittura', 'cat.Tools': 'Strumenti',
   },
   pl: {
+    credits: 'Stworzone przez VitomDev',
     back: 'Wstecz', search: 'Szukaj aplikacji', refresh: 'Odśwież', settings: 'Ustawienia',
     all: 'Wszystkie', installed: 'Zainstalowane', updates: 'Aktualizacje', updateAll: 'Aktualizuj wszystkie', select: 'Wybierz kilka',
     allCategories: 'Wszystkie kategorie', sortName: 'Nazwa', sortNewest: 'Najnowsze', sortUpdated: 'Ostatnio zaktualizowane', sortInstalled: 'Najpierw zainstalowane',
@@ -402,6 +409,7 @@ const STRINGS = {
     'cat.Writing': 'Pisanie', 'cat.Tools': 'Narzędzia',
   },
   ja: {
+    credits: '制作: VitomDev',
     back: '戻る', search: 'アプリを検索', refresh: '更新', settings: '設定',
     all: 'すべて', installed: 'インストール済み', updates: 'アップデート', updateAll: 'すべて更新', select: '複数選択',
     allCategories: 'すべてのカテゴリ', sortName: '名前', sortNewest: '新しい順', sortUpdated: '最近更新された順', sortInstalled: 'インストール済みを先に',
@@ -457,6 +465,7 @@ const STRINGS = {
     'cat.Writing': '文章', 'cat.Tools': 'ツール',
   },
   ko: {
+    credits: '제작: VitomDev',
     back: '뒤로', search: '앱 검색', refresh: '새로 고침', settings: '설정',
     all: '전체', installed: '설치됨', updates: '업데이트', updateAll: '모두 업데이트', select: '여러 개 선택',
     allCategories: '모든 카테고리', sortName: '이름', sortNewest: '최신순', sortUpdated: '최근 업데이트순', sortInstalled: '설치된 앱 먼저',
@@ -512,6 +521,7 @@ const STRINGS = {
     'cat.Writing': '글쓰기', 'cat.Tools': '도구',
   },
   'zh-CN': {
+    credits: '由 VitomDev 制作',
     back: '返回', search: '搜索应用', refresh: '刷新', settings: '设置',
     all: '全部应用', installed: '已安装', updates: '更新', updateAll: '全部更新', select: '选择多个',
     allCategories: '所有类别', sortName: '名称', sortNewest: '最新', sortUpdated: '最近更新', sortInstalled: '已安装优先',
