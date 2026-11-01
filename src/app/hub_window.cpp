@@ -26,6 +26,9 @@ constexpr UINT WM_APP_POST = WM_APP + 1;
 constexpr UINT WM_APP_OPERATION_DONE = WM_APP + 2;
 constexpr UINT WM_APP_QUIT_FOR_UPDATE = WM_APP + 3;
 constexpr UINT WM_APP_TRAY = WM_APP + 4;
+constexpr UINT WM_APP_UPDATE_PROGRESS = WM_APP + 5;
+constexpr UINT WM_APP_UPDATE_DOWNLOADED = WM_APP + 6;
+constexpr UINT WM_APP_UPDATE_INSTALLED = WM_APP + 7;
 constexpr UINT kTrayId = 1;
 constexpr UINT kMenuOpen = 1;
 constexpr UINT kMenuCheck = 2;
@@ -119,10 +122,42 @@ std::filesystem::path PickZip(HWND owner, bool save, const std::wstring& suggest
     return result;
 }
 
+std::filesystem::path OwnExecutable() {
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    return path;
+}
+
+std::filesystem::path MovedExecutable() {
+    auto path = OwnExecutable();
+    return path += L".old";
+}
+
+// Another Vitool Box process has its main window up.
+bool NewHubIsRunning() {
+    struct Search { DWORD self; bool found; } search{GetCurrentProcessId(), false};
+    EnumWindows([](HWND window, LPARAM data) -> BOOL {
+        auto* search = reinterpret_cast<Search*>(data);
+        wchar_t name[64]{};
+        DWORD processId = 0;
+        GetWindowThreadProcessId(window, &processId);
+        if (processId != search->self && GetClassNameW(window, name, 64) && wcscmp(name, HubWindow::kClassName) == 0) {
+            search->found = true;
+            return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&search));
+    return search.found;
+}
+
 }  // namespace
 
-bool HubWindow::Create(HINSTANCE instance, bool hidden) {
+bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex) {
     CleanDownloads();
+    instanceMutex_ = instanceMutex;
+    // Left behind by the last self-update.
+    std::error_code ignored;
+    std::filesystem::remove(MovedExecutable(), ignored);
     instance_ = instance;
     startedHidden_ = hidden;
     keepInTray_ = StartsWithWindows();
@@ -234,8 +269,18 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             --runningOperations_;
             return 0;
         case WM_APP_QUIT_FOR_UPDATE:
-            // The installer waits for this process to end, then starts the new version.
             DestroyWindow(window_);
+            return 0;
+        case WM_APP_UPDATE_PROGRESS:
+            updateWindow_.SetProgress(static_cast<int>(wParam) * 0.75, strings_["updDownload"]);
+            return 0;
+        case WM_APP_UPDATE_DOWNLOADED: {
+            std::unique_ptr<std::filesystem::path> setup(reinterpret_cast<std::filesystem::path*>(lParam));
+            InstallSelfUpdate(*setup);
+            return 0;
+        }
+        case WM_APP_UPDATE_INSTALLED:
+            FinishSelfUpdate(wParam != 0);
             return 0;
         case WM_CLOSE:
             if (keepInTray_) {
@@ -255,6 +300,7 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_DESTROY:
             SetTrayVisible(false);
             if (controller_) controller_->Close();
+            if (instanceMutex_) CloseHandle(instanceMutex_);
             PostQuitMessage(0);
             return 0;
     }
@@ -405,6 +451,7 @@ void HubWindow::OnWebMessage(const std::string& json) {
     } else if (type == "cancel") {
         if (const auto it = cancels_.find(appId); it != cancels_.end()) *it->second = true;
     } else if (type == "selfUpdate") {
+        for (const char* key : {"updTitle", "updSubtitle", "updDownload", "updInstall", "updOpen"}) strings_[key] = Utf8ToWide(Field(*message, key));
         StartSelfUpdateOperation(Utf8ToWide(Field(*message, "url")), Field(*message, "sha256"), Utf8ToWide(Field(*message, "fileName")));
     } else if (type == "launch") {
         const auto installed = FindInstalled(Utf8ToWide(appId));
@@ -484,28 +531,78 @@ void HubWindow::StartOperation(const JsonObject& message, bool install) {
 }
 
 void HubWindow::StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName) {
+    if (!StartsWith(url, kSelfUpdatePrefix)) {
+        Post(R"({"type":"done","appId":"hub","action":"selfUpdate","error":"notHubRelease"})");
+        return;
+    }
+    // The floating card takes over from the main window until the new version is up.
+    if (updateWindow_.Create(instance_, darkMode_, strings_["updTitle"], strings_["updSubtitle"])) {
+        updateWindow_.SetProgress(0, strings_["updDownload"]);
+        ShowWindow(window_, SW_HIDE);
+    }
     HWND window = window_;
     std::thread([=] {
-        const auto post = PosterFor(window);
-        std::wstring error;
-        if (!StartsWith(url, kSelfUpdatePrefix)) {
-            error = L"notHubRelease";
-        } else {
-            int lastPercent = -1;
-            error = StartSelfUpdate(url, sha256, fileName, [&](uint64_t received, uint64_t total) {
-                const int percent = total ? static_cast<int>(received * 100 / total) : -1;
-                if (percent != lastPercent) {
-                    lastPercent = percent;
-                    post(R"({"type":"progress","appId":"hub","percent":")" + std::to_string(percent) + "\"}");
-                }
-                return true;
-            });
-        }
+        std::filesystem::path setup;
+        int lastPercent = -1;
+        const auto error = DownloadSelfUpdate(url, sha256, fileName, [&](uint64_t received, uint64_t total) {
+            const int percent = total ? static_cast<int>(received * 100 / total) : 0;
+            if (percent != lastPercent) {
+                lastPercent = percent;
+                PostMessageW(window, WM_APP_UPDATE_PROGRESS, percent, 0);
+            }
+            return true;
+        }, setup);
         if (error.empty()) {
-            PostMessageW(window, WM_APP_QUIT_FOR_UPDATE, 0, 0);
+            PostMessageW(window, WM_APP_UPDATE_DOWNLOADED, 0, reinterpret_cast<LPARAM>(new std::filesystem::path(setup)));
         } else {
-            post(R"({"type":"done","appId":"hub","action":"selfUpdate","error":)" + JsonQuote(WideToUtf8(error)) + "}");
+            PosterFor(window)(R"({"type":"done","appId":"hub","action":"selfUpdate","error":)" + JsonQuote(WideToUtf8(error)) + "}");
+            PostMessageW(window, WM_APP_UPDATE_INSTALLED, 0, 0);
         }
+    }).detach();
+}
+
+void HubWindow::InstallSelfUpdate(const std::filesystem::path& setup) {
+    updateWindow_.Creep(75, 96, strings_["updInstall"]);
+    // Let go of everything the installer replaces or waits for: the UI files,
+    // the single-instance mutex and, by renaming it, the running executable.
+    if (controller_) controller_->Close();
+    controller_.Reset();
+    webView_.Reset();
+    if (instanceMutex_) {
+        ReleaseMutex(instanceMutex_);
+        CloseHandle(instanceMutex_);
+        instanceMutex_ = nullptr;
+    }
+    SetTrayVisible(false);
+    MoveFileExW(OwnExecutable().c_str(), MovedExecutable().c_str(), MOVEFILE_REPLACE_EXISTING);
+    HWND window = window_;
+    std::thread([=] {
+        const bool installed = RunSelfUpdate(setup).empty();
+        PostMessageW(window, WM_APP_UPDATE_INSTALLED, installed ? 1 : 0, 0);
+    }).detach();
+}
+
+void HubWindow::FinishSelfUpdate(bool installed) {
+    if (webView_) {
+        // The download failed: nothing was touched, carry on.
+        updateWindow_.Close();
+        ShowHub();
+        return;
+    }
+    if (installed) {
+        updateWindow_.SetProgress(100, strings_["updOpen"]);
+    } else {
+        // Put the old version back and start it again.
+        std::error_code ignored;
+        if (!std::filesystem::exists(OwnExecutable(), ignored)) MoveFileExW(MovedExecutable().c_str(), OwnExecutable().c_str(), 0);
+        ShellExecuteW(nullptr, L"open", OwnExecutable().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    HWND window = window_;
+    std::thread([=] {
+        // The installer starts the new version; stay until its window is up.
+        for (int attempt = 0; installed && attempt < 75 && !NewHubIsRunning(); ++attempt) Sleep(200);
+        Sleep(installed ? 600 : 0);
+        PostMessageW(window, WM_APP_QUIT_FOR_UPDATE, 0, 0);
     }).detach();
 }
 

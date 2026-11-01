@@ -109,6 +109,14 @@ An app shows up in Vitool Box when its GitHub repository under **VitomDev**:
 
 The installer has to support Inno Setup's silent mode (`/VERYSILENT`), which all of them do by default. The app page shows the repository's README and the release notes.
 
+After publishing a release, update the catalog so Vitool Box shows it right away:
+
+```powershell
+.\scripts\update-catalog.ps1 -Publish
+```
+
+It writes `catalog.json` (every app with its releases and README) with the GitHub CLI and pushes it. Vitool Box reads that file from `raw.githubusercontent.com`, which has no API rate limit; it only asks the GitHub API when the catalog is missing or more than 3 days old.
+
 ---
 
 ## 🔧 Build
@@ -128,7 +136,7 @@ It downloads the pinned dependencies into `.deps/` (Windows SDK, WebView2 SDK, C
 ## 🏗️ How it works
 
 - `VitoolBox.exe` (C++) hosts a WebView2 window with the UI in `src/ui` (HTML, CSS, JavaScript)
-- The UI finds the apps through the GitHub API each time it opens, and keeps the last list for when GitHub can't be reached
+- The UI reads the published `catalog.json` each time it opens (falling back to the GitHub API, with ETags so unchanged answers don't count against its limit), and keeps the last list for when GitHub can't be reached
 - The C++ side downloads installers, checks their SHA-256 (from the release asset's `digest`), runs them silently and reads the installed apps from Windows' list of programs
 
 ---

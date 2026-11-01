@@ -37,7 +37,7 @@
           <button class="chip" data-filter="installed" data-i18n="installed"></button>
           <button class="chip" data-filter="updates" data-i18n="updates"></button>
         </div>
-        <select class="select" id="category"></select>
+        <select class="select" id="category" hidden></select>
         <select class="select" id="sort">
           <option value="name" data-i18n="sortName"></option>
           <option value="newest" data-i18n="sortNewest"></option>
@@ -56,13 +56,17 @@
       </div>
       <div class="grid" id="grid"></div>
       <p class="empty" id="empty" hidden></p>
-      <footer class="credits"><a href="#" id="credits"></a></footer>
     </section>
 
     <section id="detail" hidden></section>
 
     <section id="settings" hidden></section>
   </main>
+
+  <footer class="credits">
+    <a href="#" id="credits"></a>
+    <a href="#" id="contact"></a>
+  </footer>
 
   <div class="dialog-backdrop" id="dialog" hidden>
     <div class="dialog" role="dialog" aria-modal="true">

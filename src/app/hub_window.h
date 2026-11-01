@@ -10,10 +10,12 @@
 #include <WebView2.h>
 
 #include <atomic>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
 
+#include "app/update_window.h"
 #include "core/json.h"
 
 namespace vitool {
@@ -25,7 +27,8 @@ public:
     static constexpr UINT kShowMessage = WM_APP + 10;
 
     // hidden: started with Windows, only the notification area icon shows.
-    bool Create(HINSTANCE instance, bool hidden);
+    // Takes the single-instance mutex: a self-update lets go of it early.
+    bool Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex);
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
@@ -40,6 +43,8 @@ private:
     // Runs an install or uninstall on a worker thread.
     void StartOperation(const JsonObject& message, bool install);
     void StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName);
+    void InstallSelfUpdate(const std::filesystem::path& setup);
+    void FinishSelfUpdate(bool installed);
     void StartBackup(const std::string& spec, bool restore);
 
     void SetTrayVisible(bool visible);
@@ -48,6 +53,8 @@ private:
     void Notify(const std::wstring& title, const std::wstring& text);
 
     HWND window_ = nullptr;
+    HANDLE instanceMutex_ = nullptr;
+    UpdateWindow updateWindow_;
     HINSTANCE instance_ = nullptr;
     bool darkMode_ = false;
     bool startedHidden_ = false;

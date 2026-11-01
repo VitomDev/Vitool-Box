@@ -170,17 +170,16 @@ std::wstring UninstallApp(std::wstring_view appId) {
     return {};
 }
 
-std::wstring StartSelfUpdate(const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
-                             const DownloadProgress& progress) {
-    std::filesystem::path setup;
-    if (auto error = DownloadInstaller(url, sha256, fileName, progress, setup); !error.empty()) return error;
-    SHELLEXECUTEINFOW info{sizeof(info)};
-    info.fMask = SEE_MASK_FLAG_NO_UI;
-    info.lpVerb = L"open";
-    info.lpFile = setup.c_str();
-    info.lpParameters = kSilentArgs;
-    info.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&info)) return L"installerStart";
+std::wstring DownloadSelfUpdate(const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
+                                const DownloadProgress& progress, std::filesystem::path& setup) {
+    return DownloadInstaller(url, sha256, fileName, progress, setup);
+}
+
+std::wstring RunSelfUpdate(const std::filesystem::path& setup) {
+    const std::wstring arguments = std::wstring(kSilentArgs) + L" /NOCLOSEAPPLICATIONS";
+    DWORD exitCode = 0;
+    if (auto error = RunAndWait(setup, arguments.c_str(), exitCode); !error.empty()) return error;
+    if (exitCode != 0) return L"installerCode|" + std::to_wstring(exitCode);
     return {};
 }
 

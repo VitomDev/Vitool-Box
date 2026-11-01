@@ -48,7 +48,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     }
 
     vitool::HubWindow window;
-    if (!window.Create(instance, background)) return 1;
+    if (!window.Create(instance, background, mutex)) return 1;
 
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -57,6 +57,5 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     }
 
     CoUninitialize();
-    if (mutex) CloseHandle(mutex);
     return 0;
 }

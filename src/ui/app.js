@@ -11,6 +11,12 @@ const SETTINGS_KEY = 'vitool.settings.v1';
 const NOTIFIED_KEY = 'vitool.notified.v1';
 const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
+// Written by scripts/update-catalog.ps1. Raw files have no API rate limit, so
+// the API is only asked when this file is missing or older than STALE_DAYS.
+const CATALOG_URL = `${RAW}/${OWNER}/${HUB_REPO}/main/catalog.json`;
+const STALE_DAYS = 3;
+const ETAG_KEY = 'vitool.etags.v1';
+const CONTACT_MAIL = 'contactvitom@gmail.com';
 const NEW_DAYS = 7;
 const CHECK_HOURS = 4;
 
@@ -132,15 +138,31 @@ function sendHostStrings() {
 
 // --- Catalog -------------------------------------------------------------------
 
+// GitHub answers 304 to a request with a matching ETag, and those do not count
+// against the hourly limit.
+const etags = readJson(ETAG_KEY, {});
+
 async function getJson(url, accept) {
-  const response = await fetch(url, { headers: { Accept: accept || 'application/vnd.github+json' } });
+  const headers = { Accept: accept || 'application/vnd.github+json' };
+  const saved = etags[url];
+  if (saved) headers['If-None-Match'] = saved.etag;
+  const response = await fetch(url, { headers, cache: 'no-store' });
+  if (response.status === 304 && saved) return saved.body;
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`);
     error.rateLimited = response.status === 403 || response.status === 429;
     error.status = response.status;
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    if (reset) error.resetAt = reset * 1000;
     throw error;
   }
-  return response.json();
+  const body = await response.json();
+  const etag = response.headers.get('etag');
+  if (etag) {
+    etags[url] = { etag, body };
+    writeJson(ETAG_KEY, etags);
+  }
+  return body;
 }
 
 function prettyName(repo) {
@@ -178,27 +200,11 @@ function toRelease(release, pattern) {
   };
 }
 
-async function loadApp(repo) {
+// repo: the repository as the GitHub API describes it; release: its latest release.
+function toApp(repo, manifest, release, extra = {}) {
+  if (!manifest || !/^\{[0-9A-Fa-f-]{36}\}$/.test(manifest.appId || '') || !release) return null;
   const branch = repo.default_branch;
-  let manifest;
-  try {
-    const response = await fetch(`${RAW}/${OWNER}/${repo.name}/${branch}/vitool.json`, { cache: 'no-cache' });
-    if (!response.ok) return null;
-    manifest = await response.json();
-  } catch {
-    return null;
-  }
-  if (!manifest || !/^\{[0-9A-Fa-f-]{36}\}$/.test(manifest.appId || '')) return null;
-
-  let release;
-  try {
-    release = await getJson(`${API}/repos/${OWNER}/${repo.name}/releases/latest`, 'application/vnd.github.html+json');
-  } catch (error) {
-    if (error.status === 404) return null;
-    throw error;
-  }
   const latest = toRelease(release, manifest.installer);
-
   return {
     repo: repo.name,
     branch,
@@ -220,23 +226,77 @@ async function loadApp(repo) {
     notesHtml: latest.notesHtml,
     releaseUrl: latest.url,
     asset: latest.asset,
+    ...extra,
   };
+}
+
+function toHubLatest(release) {
+  if (!release) return null;
+  const latest = toRelease(release, 'VitoolBoxSetup.exe');
+  return { version: latest.version, url: latest.url, asset: latest.asset };
+}
+
+async function loadApp(repo) {
+  let manifest;
+  try {
+    const response = await fetch(`${RAW}/${OWNER}/${repo.name}/${repo.default_branch}/vitool.json`, { cache: 'no-cache' });
+    if (!response.ok) return null;
+    manifest = await response.json();
+  } catch {
+    return null;
+  }
+  let release;
+  try {
+    release = await getJson(`${API}/repos/${OWNER}/${repo.name}/releases/latest`, 'application/vnd.github.html+json');
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
+  return toApp(repo, manifest, release);
 }
 
 async function fetchHubRelease() {
   try {
-    const release = await getJson(`${API}/repos/${OWNER}/${HUB_REPO}/releases/latest`);
-    const latest = toRelease(release, 'VitoolBoxSetup.exe');
-    return { version: latest.version, url: latest.url, asset: latest.asset };
+    return toHubLatest(await getJson(`${API}/repos/${OWNER}/${HUB_REPO}/releases/latest`));
   } catch {
     return null;  // No release of the hub yet, or GitHub unreachable.
   }
 }
 
-async function fetchCatalog() {
+async function fetchFromApi() {
   const search = await getJson(`${API}/search/repositories?q=topic:${TOPIC}+user:${OWNER}&per_page=100`);
   const results = await Promise.all(search.items.map((repo) => loadApp(repo)));
   return { apps: results.filter(Boolean), hubLatest: await fetchHubRelease() };
+}
+
+// The published catalog.json, with every release and README included.
+async function fetchPublished() {
+  const response = await fetch(CATALOG_URL, { cache: 'no-cache' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const catalog = await response.json();
+  if (catalog.version !== 1 || !Array.isArray(catalog.apps)) throw new Error('catalog');
+  const apps = catalog.apps.map((entry) => {
+    const releases = (entry.releases || []).filter((release) => !release.draft);
+    return toApp(entry.repo, entry.manifest, releases[0], {
+      readmeHtml: entry.readmeHtml || '',
+      releaseList: releases.map((release) => toRelease(release, entry.manifest && entry.manifest.installer)),
+    });
+  }).filter(Boolean);
+  return { apps, hubLatest: toHubLatest(catalog.hub), generated: Date.parse(catalog.generated) || 0 };
+}
+
+async function fetchCatalog() {
+  let published = null;
+  try {
+    published = await fetchPublished();
+    if (Date.now() - published.generated < STALE_DAYS * 86400000) return published;
+  } catch { /* Not published or unreachable: ask the API. */ }
+  try {
+    return await fetchFromApi();
+  } catch (error) {
+    if (published) return published;
+    throw error;
+  }
 }
 
 function readJson(key, fallback) {
@@ -282,11 +342,13 @@ async function loadCatalog() {
     const catalog = await fetchCatalog();
     writeJson(CACHE_KEY, { ...catalog, time: Date.now() });
     state.notice = null;
+    state.noticeUntil = null;
     applyCatalog(catalog);
     state.catalogReady = true;
     maybeAutoUpdate();
   } catch (error) {
     state.notice = error.rateLimited ? 'rateLimited' : 'offline';
+    state.noticeUntil = error.resetAt || null;
     renderBanner();
     if (!cached) render();
   } finally {
@@ -296,6 +358,10 @@ async function loadCatalog() {
 
 async function loadReleases(app) {
   if (state.releases[app.repo]) return;
+  if (app.releaseList) {
+    state.releases[app.repo] = app.releaseList;
+    return;
+  }
   state.releases[app.repo] = 'loading';
   try {
     const list = await getJson(`${API}/repos/${OWNER}/${app.repo}/releases?per_page=20`, 'application/vnd.github.html+json');
@@ -443,7 +509,11 @@ function selfUpdate() {
   delete state.errors.hub;
   state.busy.hub = { action: 'install', percent: 0 };
   const asset = state.hubLatest.asset;
-  send({ type: 'selfUpdate', url: asset.url, sha256: asset.sha256, fileName: asset.name });
+  send({
+    type: 'selfUpdate', url: asset.url, sha256: asset.sha256, fileName: asset.name,
+    updTitle: t('updatingTitle'), updSubtitle: t('updatingSubtitle', { version: state.hubLatest.version }),
+    updDownload: t('updatingDownload'), updInstall: t('updatingInstall'), updOpen: t('updatingOpen'),
+  });
   renderBanner();
 }
 
@@ -664,7 +734,7 @@ function renderGrid() {
 
   const empty = $('empty');
   empty.hidden = grid.children.length > 0;
-  if (!state.apps.length) empty.textContent = state.notice ? t('noAppsYet') : t('lookingForApps');
+  if (!state.apps.length) empty.textContent = state.notice ? noticeText() : t('lookingForApps');
   else if (state.filter === 'installed' && !state.query) empty.textContent = t('noneInstalled');
   else if (state.filter === 'updates' && !state.query) empty.textContent = t('allUpToDate');
   else empty.textContent = t('noMatch');
@@ -725,6 +795,11 @@ function sanitize(html, app) {
 
 async function loadReadme(app) {
   if (state.readmes[app.repo]) return;
+  if (app.readmeHtml) {
+    state.readmes[app.repo] = sanitize(app.readmeHtml, app);
+    if (state.current === app.repo) renderDetail();
+    return;
+  }
   try {
     const response = await fetch(`${API}/repos/${OWNER}/${app.repo}/readme`, { headers: { Accept: 'application/vnd.github.html' } });
     if (!response.ok) throw new Error();
@@ -779,7 +854,12 @@ function renderDetail() {
   const tabNames = { about: t('about'), notes: t('notes', { v: app.version }), versions: t('versions') };
   const tabs = el('div', { class: 'tabs' }, Object.entries(tabNames).map(([tab, label]) => el('button', {
     class: state.tab === tab ? 'active' : '',
-    onclick: () => { state.tab = tab; renderDetail(); },
+    onclick: () => {
+      if (state.tab === tab) return;
+      state.tab = tab;
+      renderDetail();
+      fadeIn($('detail').querySelector('.tab-body'));
+    },
   }, label)));
 
   let body;
@@ -796,6 +876,7 @@ function renderDetail() {
       loadReadme(app);
     }
   }
+  body.classList.add('tab-body');
   body.querySelectorAll('a[href]').forEach((link) => link.addEventListener('click', (event) => {
     event.preventDefault();
     send({ type: 'openUrl', url: link.href });
@@ -823,11 +904,17 @@ function renderBusy(appId) {
   });
 }
 
+function noticeText() {
+  if (!state.noticeUntil || state.noticeUntil < Date.now()) return t(state.notice);
+  const time = new Date(state.noticeUntil).toLocaleTimeString(currentLanguage, { hour: '2-digit', minute: '2-digit' });
+  return `${t(state.notice)} ${t('tryAfter', { time })}`;
+}
+
 function renderBanner() {
   const banner = $('banner');
   if (state.notice) {
     banner.className = 'banner warning';
-    banner.replaceChildren(el('span', {}, t(state.notice)));
+    banner.replaceChildren(el('span', {}, noticeText()));
     banner.hidden = false;
   } else if (hubHasUpdate()) {
     const busy = state.busy.hub;
@@ -938,6 +1025,13 @@ function render() {
   else renderGrid();
 }
 
+// Replays the fade-in on a view or a part of it.
+function fadeIn(node) {
+  node.classList.remove('fade-in');
+  void node.offsetWidth;
+  node.classList.add('fade-in');
+}
+
 function setView(view) {
   state.view = view;
   $('home').hidden = view !== 'home';
@@ -948,6 +1042,7 @@ function setView(view) {
   $('open-settings').hidden = view === 'settings';
   document.querySelector('main').scrollTop = 0;
   render();
+  fadeIn($(view));
 }
 
 function showDetail(repo) {
@@ -970,6 +1065,7 @@ function openLightbox(src) {
 function applyLanguage() {
   setLanguage(state.settings.language);
   $('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
+  $('contact').textContent = t('contact', { mail: CONTACT_MAIL });
   renderCategories();
   render();
   sendHostStrings();
@@ -981,6 +1077,23 @@ state.settings = readSettings();
 setLanguage(state.settings.language);
 $('sort').value = state.settings.sort;
 $('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
+$('contact').textContent = t('contact', { mail: CONTACT_MAIL });
+$('contact').addEventListener('click', async (event) => {
+  event.preventDefault();
+  try {
+    await navigator.clipboard.writeText(CONTACT_MAIL);
+  } catch {
+    return;
+  }
+  const link = $('contact');
+  link.textContent = t('mailCopied');
+  link.classList.add('copied');
+  clearTimeout(link.copiedTimer);
+  link.copiedTimer = setTimeout(() => {
+    link.textContent = t('contact', { mail: CONTACT_MAIL });
+    link.classList.remove('copied');
+  }, 1600);
+});
 $('credits').addEventListener('click', (event) => { event.preventDefault(); send({ type: 'openUrl', url: `https://github.com/${OWNER}` }); });
 $('back').addEventListener('click', showHome);
 $('open-settings').addEventListener('click', () => setView('settings'));
@@ -990,13 +1103,14 @@ $('selection-cancel').addEventListener('click', () => setSelecting(false));
 $('selection-install').addEventListener('click', installSelected);
 $('refresh').addEventListener('click', () => loadCatalog());
 $('search').addEventListener('input', (event) => { state.query = event.target.value; renderGrid(); });
-$('category').addEventListener('change', (event) => { state.category = event.target.value; renderGrid(); });
-$('sort').addEventListener('change', (event) => { state.settings.sort = event.target.value; writeSettings(); renderGrid(); });
+$('category').addEventListener('change', (event) => { state.category = event.target.value; renderGrid(); fadeIn($('grid')); });
+$('sort').addEventListener('change', (event) => { state.settings.sort = event.target.value; writeSettings(); renderGrid(); fadeIn($('grid')); });
 $('lightbox').addEventListener('click', () => { $('lightbox').hidden = true; });
 document.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
   document.querySelectorAll('.chip').forEach((other) => other.classList.toggle('active', other === chip));
   state.filter = chip.dataset.filter;
   renderGrid();
+  fadeIn($('grid'));
 }));
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
