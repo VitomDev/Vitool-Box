@@ -27,6 +27,7 @@ private:
     void Post(const std::string& json);
     // Runs an install or uninstall on a worker thread.
     void StartOperation(const std::string& appId, bool install, std::wstring url, std::string sha256, std::wstring fileName);
+    void StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName);
 
     HWND window_ = nullptr;
     bool darkMode_ = false;

@@ -20,6 +20,8 @@ namespace {
 
 constexpr UINT WM_APP_POST = WM_APP + 1;
 constexpr UINT WM_APP_OPERATION_DONE = WM_APP + 2;
+constexpr UINT WM_APP_QUIT_FOR_UPDATE = WM_APP + 3;
+constexpr wchar_t kSelfUpdatePrefix[] = L"https://github.com/VitomDev/Vitool-Box/releases/download/";
 constexpr wchar_t kHost[] = L"hub.vitool";
 constexpr wchar_t kStartPage[] = L"https://hub.vitool/index.html";
 
@@ -48,6 +50,7 @@ std::string Field(const JsonObject& object, const char* key) {
 }  // namespace
 
 bool HubWindow::Create(HINSTANCE instance) {
+    CleanDownloads();
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance;
@@ -119,6 +122,10 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP_OPERATION_DONE:
             --runningOperations_;
+            return 0;
+        case WM_APP_QUIT_FOR_UPDATE:
+            // The installer waits for this process to end, then starts the new version.
+            DestroyWindow(window_);
             return 0;
         case WM_CLOSE:
             // Quitting would cut an installer off halfway.
@@ -263,6 +270,8 @@ void HubWindow::OnWebMessage(const std::string& json) {
         StartOperation(appId, true, Utf8ToWide(Field(*message, "url")), Field(*message, "sha256"), Utf8ToWide(Field(*message, "fileName")));
     } else if (type == "uninstall") {
         StartOperation(appId, false, {}, {}, {});
+    } else if (type == "selfUpdate") {
+        StartSelfUpdateOperation(Utf8ToWide(Field(*message, "url")), Field(*message, "sha256"), Utf8ToWide(Field(*message, "fileName")));
     } else if (type == "launch") {
         const auto installed = FindInstalled(Utf8ToWide(appId));
         const auto exe = Utf8ToWide(Field(*message, "exe"));
@@ -299,6 +308,33 @@ void HubWindow::StartOperation(const std::string& appId, bool install, std::wstr
         post(R"({"type":"done","appId":)" + JsonQuote(appId) + R"(,"action":)" + JsonQuote(install ? "install" : "uninstall") +
              R"(,"error":)" + JsonQuote(WideToUtf8(error)) + "}");
         PostMessageW(window, WM_APP_OPERATION_DONE, 0, 0);
+    }).detach();
+}
+
+void HubWindow::StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName) {
+    HWND window = window_;
+    std::thread([=] {
+        auto post = [window](std::string json) {
+            auto* heap = new std::string(std::move(json));
+            if (!PostMessageW(window, WM_APP_POST, 0, reinterpret_cast<LPARAM>(heap))) delete heap;
+        };
+        std::wstring error;
+        if (!StartsWith(url, kSelfUpdatePrefix)) {
+            error = L"This update is not a Vitool Box release.";
+        } else {
+            int lastPercent = -1;
+            error = StartSelfUpdate(url, sha256, fileName, [&](uint64_t received, uint64_t total) {
+                const int percent = total ? static_cast<int>(received * 100 / total) : -1;
+                if (percent == lastPercent) return;
+                lastPercent = percent;
+                post(R"({"type":"progress","appId":"hub","percent":")" + std::to_string(percent) + "\"}");
+            });
+        }
+        if (error.empty()) {
+            PostMessageW(window, WM_APP_QUIT_FOR_UPDATE, 0, 0);
+        } else {
+            post(R"({"type":"done","appId":"hub","action":"selfUpdate","error":)" + JsonQuote(WideToUtf8(error)) + "}");
+        }
     }).detach();
 }
 

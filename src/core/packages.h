@@ -33,5 +33,12 @@ std::optional<InstalledApp> FindInstalled(std::wstring_view appId);
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
                         const DownloadProgress& progress);
 std::wstring UninstallApp(std::wstring_view appId);
+// Downloads Vitool Box's own installer and starts it silently without
+// waiting: the caller has to quit so its files can be replaced.
+std::wstring StartSelfUpdate(const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
+                             const DownloadProgress& progress);
+// Removes installers left over from earlier runs (a self-update cannot
+// delete its own).
+void CleanDownloads();
 
 }  // namespace vitool

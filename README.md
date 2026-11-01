@@ -12,7 +12,9 @@ Browse the apps, read what each one does, and turn on the ones you want: Vitool 
 
 - 🗂️ **App catalog**: every Vitool Box app with its icon, description, screenshots and release notes
 - 🔘 **Turn apps on and off**: on downloads and installs the app, off uninstalls it. No setup wizards
-- ⬆️ **Updates**: see when a newer version is out and update with one click
+- ⬆️ **Updates**: see when a newer version is out and update with one click, right from the app list, or all at once
+- 🔄 **Updates itself**: Vitool Box downloads its new version and restarts into it
+- 🤖 **Optional auto-update**: install your apps' updates every time you open Vitool Box
 - ✨ **New apps appear automatically**, without updating Vitool Box
 - 🔍 **Search** and filter by *Installed* or *Updates*
 - ▶️ **Open** installed apps straight from their page
@@ -40,9 +42,16 @@ Uninstalling Vitool Box (Settings → Apps) keeps the apps you installed with it
 | --- | --- |
 | Install an app | Turn on its switch, or open it and click **Install** |
 | Uninstall an app | Turn off its switch, or open it and click **Uninstall** |
-| Update an app | Open it and click **Update to x.y.z** (or the *Updates* filter) |
+| Update an app | Click **Update to x.y.z** on its card or its page |
+| Update every app | **Update all** (shown when several apps have updates) |
+| Update Vitool Box | **Update and restart** on the banner at the top |
 | Open an installed app | Open its page and click **Open** |
 | Refresh the catalog | ⟳ button at the top right |
+| Settings | ⚙️ button at the top right |
+
+### ⚙️ Settings
+
+- **Update everything when Vitool Box opens** (off by default): installs your apps' updates each time you open Vitool Box. Vitool Box itself is always updated by hand, from its banner
 
 Some apps (like Iris Image) install for all users, so Windows asks for administrator permission when you turn them on.
 

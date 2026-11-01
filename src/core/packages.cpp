@@ -42,6 +42,26 @@ bool IsHexDigit(wchar_t c) {
     return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F');
 }
 
+std::filesystem::path DownloadsDir() {
+    return DataDir() / L"downloads";
+}
+
+// Validates the release data, downloads the installer and checks its SHA-256.
+std::wstring DownloadInstaller(const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
+                               const DownloadProgress& progress, std::filesystem::path& setup) {
+    if (!IsAllowedDownloadUrl(url) || !IsValidSha256(sha256) || !IsSafeFileName(fileName) ||
+        ToLower(std::filesystem::path(fileName).extension().wstring()) != L".exe") {
+        return L"This app's release information is not valid.";
+    }
+    std::error_code ignored;
+    std::filesystem::create_directories(DownloadsDir(), ignored);
+    setup = DownloadsDir() / fileName;
+    auto error = DownloadFile(url, setup, progress);
+    if (error.empty() && Sha256File(setup) != sha256) error = L"The downloaded installer is damaged (checksum mismatch).";
+    if (!error.empty()) std::filesystem::remove(setup, ignored);
+    return error;
+}
+
 }  // namespace
 
 bool IsValidAppId(std::wstring_view appId) {
@@ -116,22 +136,16 @@ std::optional<InstalledApp> FindInstalled(std::wstring_view appId) {
 
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
                         const DownloadProgress& progress) {
-    if (!IsValidAppId(appId) || !IsAllowedDownloadUrl(url) || !IsValidSha256(sha256) || !IsSafeFileName(fileName) ||
-        ToLower(std::filesystem::path(fileName).extension().wstring()) != L".exe") {
-        return L"This app's release information is not valid.";
-    }
-
-    const auto folder = DataDir() / L"downloads";
-    std::error_code ignored;
-    std::filesystem::create_directories(folder, ignored);
-    const auto setup = folder / fileName;
-
-    auto error = DownloadFile(url, setup, progress);
-    if (error.empty() && Sha256File(setup) != sha256) error = L"The downloaded installer is damaged (checksum mismatch).";
+    if (!IsValidAppId(appId)) return L"This app's release information is not valid.";
+    std::filesystem::path setup;
+    auto error = DownloadInstaller(url, sha256, fileName, progress, setup);
 
     DWORD exitCode = 0;
-    if (error.empty()) error = RunAndWait(setup, kSilentArgs, exitCode);
-    std::filesystem::remove(setup, ignored);
+    std::error_code ignored;
+    if (error.empty()) {
+        error = RunAndWait(setup, kSilentArgs, exitCode);
+        std::filesystem::remove(setup, ignored);
+    }
     if (!error.empty()) return error;
     if (exitCode != 0) return L"The installer stopped with code " + std::to_wstring(exitCode) + L".";
     if (!FindInstalled(appId)) return L"The installer finished, but the app was not found afterwards.";
@@ -154,6 +168,25 @@ std::wstring UninstallApp(std::wstring_view appId) {
     for (int attempt = 0; attempt < 100 && FindInstalled(appId); ++attempt) Sleep(200);
     if (FindInstalled(appId)) return L"The app could not be fully uninstalled.";
     return {};
+}
+
+std::wstring StartSelfUpdate(const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
+                             const DownloadProgress& progress) {
+    std::filesystem::path setup;
+    if (auto error = DownloadInstaller(url, sha256, fileName, progress, setup); !error.empty()) return error;
+    SHELLEXECUTEINFOW info{sizeof(info)};
+    info.fMask = SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = L"open";
+    info.lpFile = setup.c_str();
+    info.lpParameters = kSilentArgs;
+    info.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&info)) return L"Could not start the installer.";
+    return {};
+}
+
+void CleanDownloads() {
+    std::error_code ignored;
+    std::filesystem::remove_all(DownloadsDir(), ignored);
 }
 
 }  // namespace vitool

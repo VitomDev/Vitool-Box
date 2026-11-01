@@ -5,7 +5,7 @@
 ;
 ; Built by build.ps1, which passes /DBuildDir=<folder with VitoolBox.exe>.
 
-#define AppVersion "1.0.1"
+#define AppVersion "1.1.0"
 #define AppName "Vitool Box"
 
 #ifndef BuildDir
@@ -56,6 +56,26 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\VitoolBox.exe"
 
 [Run]
 Filename: "{app}\VitoolBox.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+; A silent install is an update started from Vitool Box itself: reopen it.
+Filename: "{app}\VitoolBox.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\{#AppName}"
+
+[Code]
+// Vitool Box quits right after starting its own update; wait for it to be
+// gone so its files can be replaced.
+function InitializeSetup: Boolean;
+var
+  Attempts: Integer;
+begin
+  Attempts := 0;
+  while CheckForMutexes('VitomDev.VitoolBox.SingleInstance') and (Attempts < 100) do
+  begin
+    Sleep(100);
+    Attempts := Attempts + 1;
+  end;
+  // Give the process a moment to exit after releasing the mutex.
+  Sleep(500);
+  Result := True;
+end;

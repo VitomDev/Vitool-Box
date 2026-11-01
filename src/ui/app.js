@@ -8,6 +8,7 @@ const TOPIC = 'vitool-box';
 const HUB_REPO = 'Vitool-Box';
 const CACHE_KEY = 'vitool.catalog.v1';
 const CACHE_HOURS = 3;
+const SETTINGS_KEY = 'vitool.settings.v1';
 const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
 
@@ -18,7 +19,11 @@ const state = {
   errors: {},      // appId -> message
   filter: 'all',
   query: '',
+  view: 'home',    // home, detail or settings
   current: null,   // repo shown in the detail view
+  queue: [],       // updates waiting to run, one at a time
+  catalogReady: false,
+  autoUpdateDone: false,
   tab: 'about',
   readmes: {},     // repo -> html
   hubVersion: null,
@@ -42,25 +47,33 @@ if (host) {
       case 'hello':
         state.hubVersion = message.version;
         renderBanner();
+        if (state.view === 'settings') renderSettings();
+        maybeAutoUpdate();
         break;
       case 'state':
         state.installed = message.apps;
+        state.stateReady = true;
         render();
+        maybeAutoUpdate();
         break;
       case 'progress':
         if (state.busy[message.appId]) state.busy[message.appId].percent = Number(message.percent);
-        renderBusy(message.appId);
+        if (message.appId === 'hub') renderBanner();
+        else renderBusy(message.appId);
         break;
       case 'done':
         delete state.busy[message.appId];
         if (message.error) state.errors[message.appId] = message.error;
+        if (message.appId === 'hub') renderBanner();
         refreshInstalled();
+        runQueue();
         break;
     }
   });
 }
 
 function refreshInstalled() {
+  state.stateReady = false;
   send({ type: 'state', ids: state.apps.map((app) => app.appId).join(',') });
 }
 
@@ -138,16 +151,26 @@ async function loadApp(repo) {
   };
 }
 
+async function fetchHubRelease() {
+  try {
+    const release = await getJson(`${API}/repos/${OWNER}/${HUB_REPO}/releases/latest`);
+    const asset = pickInstaller(release.assets || [], 'VitoolBoxSetup.exe');
+    const sha256 = asset && /^sha256:[0-9a-f]{64}$/.test(asset.digest || '') ? asset.digest.slice(7) : null;
+    return {
+      version: release.tag_name.replace(/^v/i, ''),
+      url: release.html_url,
+      asset: asset && sha256 ? { name: asset.name, url: asset.browser_download_url, sha256 } : null,
+    };
+  } catch {
+    return null;  // No release of the hub yet, or GitHub unreachable.
+  }
+}
+
 async function fetchCatalog() {
   const search = await getJson(`${API}/search/repositories?q=topic:${TOPIC}+user:${OWNER}&per_page=100`);
   const results = await Promise.all(search.items.map((repo) => loadApp(repo)));
   const apps = results.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
-  let hubLatest = null;
-  try {
-    const release = await getJson(`${API}/repos/${OWNER}/${HUB_REPO}/releases/latest`);
-    hubLatest = { version: release.tag_name.replace(/^v/i, ''), url: release.html_url };
-  } catch { /* No release of the hub yet. */ }
-  return { apps, hubLatest };
+  return { apps, hubLatest: await fetchHubRelease() };
 }
 
 function readCache() {
@@ -160,8 +183,22 @@ function readCache() {
 
 function writeCache(catalog) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ time: Date.now(), ...catalog }));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ...catalog, time: catalog.time || Date.now() }));
   } catch { /* Storage unavailable: the catalog is fetched again next time. */ }
+}
+
+function readSettings() {
+  try {
+    return { autoUpdate: false, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+  } catch {
+    return { autoUpdate: false };
+  }
+}
+
+function writeSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+  } catch { /* Storage unavailable: the setting lasts until Vitool Box closes. */ }
 }
 
 function applyCatalog(catalog) {
@@ -176,6 +213,15 @@ async function loadCatalog(force) {
   const cached = readCache();
   if (cached && !force && Date.now() - cached.time < CACHE_HOURS * 3600 * 1000) {
     applyCatalog(cached);
+    // The hub's own update is always checked: it's a single request.
+    const hubLatest = await fetchHubRelease();
+    if (hubLatest) {
+      state.hubLatest = hubLatest;
+      writeCache({ apps: cached.apps, hubLatest, time: cached.time });
+      renderBanner();
+    }
+    state.catalogReady = true;
+    maybeAutoUpdate();
     return;
   }
   if (cached) applyCatalog(cached);
@@ -186,6 +232,8 @@ async function loadCatalog(force) {
     writeCache(catalog);
     state.notice = null;
     applyCatalog(catalog);
+    state.catalogReady = true;
+    maybeAutoUpdate();
   } catch (error) {
     state.notice = error.rateLimited
       ? 'GitHub is limiting requests for now. Showing the last list; try again in a while.'
@@ -264,6 +312,50 @@ function uninstall(app) {
   });
 }
 
+function hubHasUpdate() {
+  return Boolean(state.hubVersion && state.hubLatest && compareVersions(state.hubLatest.version, state.hubVersion) > 0);
+}
+
+function selfUpdate() {
+  if (!state.hubLatest || !state.hubLatest.asset || Object.keys(state.busy).length || state.queue.length) return;
+  delete state.errors.hub;
+  state.busy.hub = { action: 'install', percent: 0 };
+  const asset = state.hubLatest.asset;
+  send({ type: 'selfUpdate', url: asset.url, sha256: asset.sha256, fileName: asset.name });
+  renderBanner();
+}
+
+function updatableApps() {
+  return state.apps.filter((app) => statusOf(app) === 'update' && app.asset && !state.busy[app.appId]);
+}
+
+// Installers run one at a time. Vitool Box itself is only updated from its
+// own banner, never as part of this.
+function updateAll() {
+  for (const app of updatableApps()) {
+    if (!state.queue.includes(app.appId)) state.queue.push(app.appId);
+  }
+  runQueue();
+  render();
+}
+
+function runQueue() {
+  if (Object.keys(state.busy).length) return;
+  const next = state.queue.shift();
+  if (!next) return;
+  const app = state.apps.find((item) => item.appId === next);
+  if (app && statusOf(app) === 'update') install(app);
+  else runQueue();
+}
+
+// "Update everything when Vitool Box opens": once per run, when both the
+// catalog and the installed versions are known.
+function maybeAutoUpdate() {
+  if (!state.settings.autoUpdate || state.autoUpdateDone || !state.catalogReady || !state.stateReady) return;
+  state.autoUpdateDone = true;
+  updateAll();
+}
+
 function toggle(app) {
   if (state.installed[app.appId]) uninstall(app);
   else install(app);
@@ -298,6 +390,18 @@ function statusPill(app) {
   return el('span', { class: `status ${status}` }, text);
 }
 
+// Updates can be started from the card itself, without opening the app.
+function cardAction(app) {
+  if (statusOf(app) !== 'update' || !app.asset) return statusPill(app);
+  const queued = state.queue.includes(app.appId);
+  return el('button', {
+    class: 'button primary small',
+    disabled: queued,
+    title: `Update to ${app.version}`,
+    onclick: (event) => { event.stopPropagation(); install(app); },
+  }, queued ? 'Queued' : `Update to ${app.version}`);
+}
+
 function switchButton(app) {
   const on = Boolean(state.installed[app.appId]);
   return el('button', {
@@ -326,7 +430,8 @@ function renderGrid() {
     el('div', { class: 'card-head' }, appIcon(app),
       el('div', {}, el('h3', {}, app.name), el('div', { class: 'category' }, app.category))),
     el('p', {}, app.tagline),
-    el('div', { class: 'card-foot' }, busyView(app) || statusPill(app), switchButton(app)))));
+    el('div', { class: 'card-foot' }, busyView(app) || cardAction(app), switchButton(app)))));
+  $('update-all').hidden = updatableApps().length < 2;
 
   const empty = $('empty');
   empty.hidden = grid.children.length > 0;
@@ -455,39 +560,88 @@ function renderBanner() {
     banner.className = 'banner warning';
     banner.replaceChildren(el('span', {}, state.notice));
     banner.hidden = false;
-  } else if (state.hubVersion && state.hubLatest && compareVersions(state.hubLatest.version, state.hubVersion) > 0) {
+  } else if (hubHasUpdate()) {
+    const busy = state.busy.hub;
     banner.className = 'banner';
-    banner.replaceChildren(el('span', {}, `Vitool Box ${state.hubLatest.version} is available.`),
-      el('button', { class: 'button primary', onclick: () => send({ type: 'openUrl', url: state.hubLatest.url }) }, 'Download'));
+    let action;
+    if (busy) {
+      const percent = busy.percent;
+      action = el('div', { class: 'busy banner-busy' },
+        el('span', { class: 'busy-label' }, percent >= 0 && percent < 100 ? `Downloading ${percent}%` : 'Restarting to update…'),
+        el('div', { class: `progress${percent < 0 || percent >= 100 ? ' indeterminate' : ''}` }, el('div', { style: `width:${Math.max(percent, 0)}%` })));
+    } else if (state.hubLatest.asset) {
+      const appsBusy = Object.keys(state.busy).length > 0 || state.queue.length > 0;
+      action = el('button', {
+        class: 'button primary',
+        disabled: appsBusy,
+        title: appsBusy ? 'Available once the current installs finish' : null,
+        onclick: selfUpdate,
+      }, 'Update and restart');
+    } else {
+      action = el('button', { class: 'button primary', onclick: () => send({ type: 'openUrl', url: state.hubLatest.url }) }, 'Download');
+    }
+    banner.replaceChildren(
+      el('span', {}, `Vitool Box ${state.hubLatest.version} is available.`, state.errors.hub ? el('span', { class: 'error' }, ` ${state.errors.hub}`) : null),
+      action);
     banner.hidden = false;
   } else {
     banner.hidden = true;
   }
 }
 
+function renderSettings() {
+  const autoUpdate = el('button', {
+    class: 'switch',
+    role: 'switch',
+    id: 'auto-update',
+    'aria-checked': String(state.settings.autoUpdate),
+    onclick: () => {
+      state.settings.autoUpdate = !state.settings.autoUpdate;
+      writeSettings();
+      renderSettings();
+    },
+  });
+  $('settings').replaceChildren(
+    el('h1', { class: 'page-title' }, 'Settings'),
+    el('div', { class: 'setting' },
+      el('label', { for: 'auto-update' },
+        el('strong', {}, 'Update everything when Vitool Box opens'),
+        el('span', {}, 'Installs the available updates of your apps each time you open it. Vitool Box itself is updated from its banner.')),
+      autoUpdate),
+    el('h2', { class: 'section-title' }, 'About'),
+    el('div', { class: 'setting' },
+      el('div', {}, el('strong', {}, `Vitool Box ${state.hubVersion || ''}`), el('span', {}, 'All VitomDev apps in one place. MIT licensed.')),
+      el('button', { class: 'button', onclick: () => send({ type: 'openUrl', url: `https://github.com/${OWNER}/${HUB_REPO}` }) }, 'View on GitHub')));
+}
+
 function render() {
-  if (state.current) renderDetail();
+  renderBanner();
+  if (state.view === 'detail') renderDetail();
+  else if (state.view === 'settings') renderSettings();
   else renderGrid();
+}
+
+function setView(view) {
+  state.view = view;
+  $('home').hidden = view !== 'home';
+  $('detail').hidden = view !== 'detail';
+  $('settings').hidden = view !== 'settings';
+  $('back').hidden = view === 'home';
+  $('search').hidden = view !== 'home';
+  $('open-settings').hidden = view === 'settings';
+  document.querySelector('main').scrollTop = 0;
+  render();
 }
 
 function showDetail(repo) {
   state.current = repo;
   state.tab = 'about';
-  $('home').hidden = true;
-  $('detail').hidden = false;
-  $('back').hidden = false;
-  $('search').hidden = true;
-  document.querySelector('main').scrollTop = 0;
-  renderDetail();
+  setView('detail');
 }
 
 function showHome() {
   state.current = null;
-  $('home').hidden = false;
-  $('detail').hidden = true;
-  $('back').hidden = true;
-  $('search').hidden = false;
-  renderGrid();
+  setView('home');
 }
 
 function openLightbox(src) {
@@ -498,7 +652,10 @@ function openLightbox(src) {
 
 // --- Start ---------------------------------------------------------------------
 
+state.settings = readSettings();
 $('back').addEventListener('click', showHome);
+$('open-settings').addEventListener('click', () => setView('settings'));
+$('update-all').addEventListener('click', updateAll);
 $('refresh').addEventListener('click', () => loadCatalog(true));
 $('search').addEventListener('input', (event) => { state.query = event.target.value; renderGrid(); });
 $('lightbox').addEventListener('click', () => { $('lightbox').hidden = true; });
@@ -511,7 +668,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!$('lightbox').hidden) $('lightbox').hidden = true;
   else if (!$('dialog').hidden) $('dialog').hidden = true;
-  else if (state.current) showHome();
+  else if (state.view !== 'home') showHome();
 });
 // The installed list can change outside the hub (e.g. Settings > Apps).
 window.addEventListener('focus', () => { if (state.apps.length) refreshInstalled(); });
