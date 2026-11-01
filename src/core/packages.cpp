@@ -29,8 +29,8 @@ std::wstring RunAndWait(const std::filesystem::path& program, const wchar_t* arg
     info.lpParameters = arguments;
     info.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&info) || !info.hProcess) {
-        if (GetLastError() == ERROR_CANCELLED) return L"Administrator permission was not granted.";
-        return L"Could not start the installer.";
+        if (GetLastError() == ERROR_CANCELLED) return L"noAdmin";
+        return L"installerStart";
     }
     WaitForSingleObject(info.hProcess, INFINITE);
     GetExitCodeProcess(info.hProcess, &exitCode);
@@ -51,13 +51,13 @@ std::wstring DownloadInstaller(const std::wstring& url, const std::string& sha25
                                const DownloadProgress& progress, std::filesystem::path& setup) {
     if (!IsAllowedDownloadUrl(url) || !IsValidSha256(sha256) || !IsSafeFileName(fileName) ||
         ToLower(std::filesystem::path(fileName).extension().wstring()) != L".exe") {
-        return L"This app's release information is not valid.";
+        return L"badRelease";
     }
     std::error_code ignored;
     std::filesystem::create_directories(DownloadsDir(), ignored);
     setup = DownloadsDir() / fileName;
     auto error = DownloadFile(url, setup, progress);
-    if (error.empty() && Sha256File(setup) != sha256) error = L"The downloaded installer is damaged (checksum mismatch).";
+    if (error.empty() && Sha256File(setup) != sha256) error = L"checksum";
     if (!error.empty()) std::filesystem::remove(setup, ignored);
     return error;
 }
@@ -136,7 +136,7 @@ std::optional<InstalledApp> FindInstalled(std::wstring_view appId) {
 
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
                         const DownloadProgress& progress) {
-    if (!IsValidAppId(appId)) return L"This app's release information is not valid.";
+    if (!IsValidAppId(appId)) return L"badRelease";
     std::filesystem::path setup;
     auto error = DownloadInstaller(url, sha256, fileName, progress, setup);
 
@@ -147,8 +147,8 @@ std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const 
         std::filesystem::remove(setup, ignored);
     }
     if (!error.empty()) return error;
-    if (exitCode != 0) return L"The installer stopped with code " + std::to_wstring(exitCode) + L".";
-    if (!FindInstalled(appId)) return L"The installer finished, but the app was not found afterwards.";
+    if (exitCode != 0) return L"installerCode|" + std::to_wstring(exitCode);
+    if (!FindInstalled(appId)) return L"notFoundAfter";
     return {};
 }
 
@@ -157,16 +157,16 @@ std::wstring UninstallApp(std::wstring_view appId) {
     if (!app) return {};
     const auto uninstaller = UninstallerFromCommand(app->uninstallString);
     std::error_code ignored;
-    if (uninstaller.empty() || !std::filesystem::exists(uninstaller, ignored)) return L"The app's uninstaller was not found.";
+    if (uninstaller.empty() || !std::filesystem::exists(uninstaller, ignored)) return L"uninstallerMissing";
 
     DWORD exitCode = 0;
     if (auto error = RunAndWait(uninstaller, kSilentArgs, exitCode); !error.empty()) return error;
-    if (exitCode != 0) return L"The uninstaller stopped with code " + std::to_wstring(exitCode) + L".";
+    if (exitCode != 0) return L"uninstallerCode|" + std::to_wstring(exitCode);
 
     // Inno's uninstaller finishes its work from a copy of itself, so give it
     // a moment to remove its entry.
     for (int attempt = 0; attempt < 100 && FindInstalled(appId); ++attempt) Sleep(200);
-    if (FindInstalled(appId)) return L"The app could not be fully uninstalled.";
+    if (FindInstalled(appId)) return L"uninstallIncomplete";
     return {};
 }
 
@@ -180,7 +180,7 @@ std::wstring StartSelfUpdate(const std::wstring& url, const std::string& sha256,
     info.lpFile = setup.c_str();
     info.lpParameters = kSilentArgs;
     info.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&info)) return L"Could not start the installer.";
+    if (!ShellExecuteExW(&info)) return L"installerStart";
     return {};
 }
 

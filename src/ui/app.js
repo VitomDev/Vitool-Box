@@ -8,25 +8,36 @@ const TOPIC = 'vitool-box';
 const HUB_REPO = 'Vitool-Box';
 const CACHE_KEY = 'vitool.catalog.v1';
 const SETTINGS_KEY = 'vitool.settings.v1';
+const NOTIFIED_KEY = 'vitool.notified.v1';
 const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
+const NEW_DAYS = 7;
+const CHECK_HOURS = 4;
 
 const state = {
   apps: [],
   installed: {},   // appId -> { version }
   busy: {},        // appId -> { action, percent }
-  errors: {},      // appId -> message
+  errors: {},      // appId -> error key from the host
+  lastAction: {},  // appId -> what to repeat on Retry
   filter: 'all',
+  category: '',
   query: '',
   view: 'home',    // home, detail or settings
   current: null,   // repo shown in the detail view
-  queue: [],       // updates waiting to run, one at a time
+  queue: [],       // installs waiting to run, one at a time
+  selecting: false,
+  selected: new Set(),
   catalogReady: false,
   autoUpdateDone: false,
   tab: 'about',
   readmes: {},     // repo -> html
+  releases: {},    // repo -> list of releases, or 'error'
   hubVersion: null,
   hubLatest: null,
+  startup: false,  // starts with Windows and stays in the notification area
+  hidden: false,   // started hidden by Windows
+  backupMessage: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,14 +56,18 @@ if (host) {
     switch (message.type) {
       case 'hello':
         state.hubVersion = message.version;
+        state.startup = message.startup === '1';
+        state.hidden = message.hidden === '1';
         renderBanner();
         if (state.view === 'settings') renderSettings();
+        scheduleChecks();
         maybeAutoUpdate();
         break;
       case 'state':
         state.installed = message.apps;
         state.stateReady = true;
         render();
+        reportUpdates();
         maybeAutoUpdate();
         break;
       case 'progress':
@@ -60,12 +75,42 @@ if (host) {
         if (message.appId === 'hub') renderBanner();
         else renderBusy(message.appId);
         break;
+      case 'running': {
+        delete state.busy[message.appId];
+        const app = appById(message.appId);
+        if (app) askToCloseApp(app, message.action);
+        render();
+        break;
+      }
       case 'done':
         delete state.busy[message.appId];
-        if (message.error) state.errors[message.appId] = message.error;
+        if (message.error && message.error !== 'cancelled') state.errors[message.appId] = message.error;
         if (message.appId === 'hub') renderBanner();
         refreshInstalled();
         runQueue();
+        break;
+      case 'startup':
+        state.startup = message.enabled === '1';
+        scheduleChecks();
+        renderSettings();
+        break;
+      case 'backupDone':
+      case 'restoreDone':
+        if (message.cancelled === '1') state.backupMessage = null;
+        else if (message.error) state.backupMessage = { error: true, text: errorText(message.error) };
+        else {
+          const names = message.apps.split(',').map((repo) => (appByRepo(repo) || { name: repo }).name).join(', ');
+          state.backupMessage = { error: false, text: t(message.type === 'backupDone' ? 'backupDone' : 'restoreDone', { apps: names }) };
+        }
+        renderSettings();
+        break;
+      case 'checkUpdates':
+        loadCatalog();
+        break;
+      case 'showUpdates':
+        state.filter = 'updates';
+        document.querySelectorAll('.chip').forEach((chip) => chip.classList.toggle('active', chip.dataset.filter === 'updates'));
+        showHome();
         break;
     }
   });
@@ -74,6 +119,14 @@ if (host) {
 function refreshInstalled() {
   state.stateReady = false;
   send({ type: 'state', ids: state.apps.map((app) => app.appId).join(',') });
+}
+
+// Texts the host shows itself: tray menu and the close confirmation.
+function sendHostStrings() {
+  send({
+    type: 'strings', closeBusy: t('closeBusy'), trayOpen: t('trayOpen'), trayCheck: t('trayCheck'), trayQuit: t('trayQuit'),
+    trayTip: trayTip(),
+  });
 }
 
 // --- Catalog -------------------------------------------------------------------
@@ -108,6 +161,22 @@ function pickInstaller(assets, pattern) {
   return exes.find((asset) => /setup/i.test(asset.name));
 }
 
+function releaseAsset(release, pattern) {
+  const asset = pickInstaller(release.assets || [], pattern);
+  const sha256 = asset && /^sha256:[0-9a-f]{64}$/.test(asset.digest || '') ? asset.digest.slice(7) : null;
+  return asset && sha256 ? { name: asset.name, url: asset.browser_download_url, sha256, size: asset.size } : null;
+}
+
+function toRelease(release, pattern) {
+  return {
+    version: (release.tag_name || '').replace(/^v/i, ''),
+    date: release.published_at,
+    notesHtml: release.body_html || '',
+    url: release.html_url,
+    asset: releaseAsset(release, pattern),
+  };
+}
+
 async function loadApp(repo) {
   const branch = repo.default_branch;
   let manifest;
@@ -127,8 +196,7 @@ async function loadApp(repo) {
     if (error.status === 404) return null;
     throw error;
   }
-  const asset = pickInstaller(release.assets || [], manifest.installer);
-  const sha256 = asset && /^sha256:[0-9a-f]{64}$/.test(asset.digest || '') ? asset.digest.slice(7) : null;
+  const latest = toRelease(release, manifest.installer);
 
   return {
     repo: repo.name,
@@ -141,25 +209,24 @@ async function loadApp(repo) {
     screenshots: (manifest.screenshots || []).map((path) => rawUrl(repo, branch, path)).filter(Boolean),
     appId: manifest.appId.toUpperCase(),
     exe: manifest.exe || null,
+    installer: manifest.installer || null,
+    admin: manifest.admin === true,
+    settings: Array.isArray(manifest.settings) ? manifest.settings.filter((entry) => typeof entry === 'string') : [],
     homepage: repo.html_url,
-    updatedAt: release.published_at,
-    version: (release.tag_name || '').replace(/^v/i, ''),
-    notesHtml: release.body_html || '',
-    releaseUrl: release.html_url,
-    asset: asset && sha256 ? { name: asset.name, url: asset.browser_download_url, sha256, size: asset.size } : null,
+    createdAt: repo.created_at,
+    updatedAt: latest.date,
+    version: latest.version,
+    notesHtml: latest.notesHtml,
+    releaseUrl: latest.url,
+    asset: latest.asset,
   };
 }
 
 async function fetchHubRelease() {
   try {
     const release = await getJson(`${API}/repos/${OWNER}/${HUB_REPO}/releases/latest`);
-    const asset = pickInstaller(release.assets || [], 'VitoolBoxSetup.exe');
-    const sha256 = asset && /^sha256:[0-9a-f]{64}$/.test(asset.digest || '') ? asset.digest.slice(7) : null;
-    return {
-      version: release.tag_name.replace(/^v/i, ''),
-      url: release.html_url,
-      asset: asset && sha256 ? { name: asset.name, url: asset.browser_download_url, sha256 } : null,
-    };
+    const latest = toRelease(release, 'VitoolBoxSetup.exe');
+    return { version: latest.version, url: latest.url, asset: latest.asset };
   } catch {
     return null;  // No release of the hub yet, or GitHub unreachable.
   }
@@ -168,42 +235,37 @@ async function fetchHubRelease() {
 async function fetchCatalog() {
   const search = await getJson(`${API}/search/repositories?q=topic:${TOPIC}+user:${OWNER}&per_page=100`);
   const results = await Promise.all(search.items.map((repo) => loadApp(repo)));
-  const apps = results.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
-  return { apps, hubLatest: await fetchHubRelease() };
+  return { apps: results.filter(Boolean), hubLatest: await fetchHubRelease() };
 }
 
-function readCache() {
+function readJson(key, fallback) {
   try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY));
+    return JSON.parse(localStorage.getItem(key)) || fallback;
   } catch {
-    return null;
+    return fallback;
   }
 }
 
-function writeCache(catalog) {
+function writeJson(key, value) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ ...catalog, time: Date.now() }));
-  } catch { /* Storage unavailable: the catalog is fetched again next time. */ }
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch { /* Storage unavailable: it lasts until Vitool Box closes. */ }
 }
 
 function readSettings() {
-  try {
-    return { autoUpdate: false, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
-  } catch {
-    return { autoUpdate: false };
-  }
+  return { autoUpdate: false, notify: true, language: 'auto', sort: 'name', ...readJson(SETTINGS_KEY, {}) };
 }
 
 function writeSettings() {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
-  } catch { /* Storage unavailable: the setting lasts until Vitool Box closes. */ }
+  writeJson(SETTINGS_KEY, state.settings);
 }
 
 function applyCatalog(catalog) {
   state.apps = catalog.apps;
   state.hubLatest = catalog.hubLatest;
+  state.releases = {};
   refreshInstalled();
+  renderCategories();
   render();
   renderBanner();
 }
@@ -211,26 +273,36 @@ function applyCatalog(catalog) {
 // Fetched on every start so new releases show up right away; the cached list
 // is shown meanwhile and kept when GitHub can't be reached.
 async function loadCatalog() {
-  const cached = readCache();
-  if (cached) applyCatalog(cached);
+  const cached = readJson(CACHE_KEY, null);
+  if (cached && !state.apps.length) applyCatalog(cached);
 
   $('refresh').classList.add('spinning');
   try {
     const catalog = await fetchCatalog();
-    writeCache(catalog);
+    writeJson(CACHE_KEY, { ...catalog, time: Date.now() });
     state.notice = null;
     applyCatalog(catalog);
     state.catalogReady = true;
     maybeAutoUpdate();
   } catch (error) {
-    state.notice = error.rateLimited
-      ? 'GitHub is limiting requests for now. Showing the last list; try again in a while.'
-      : 'Could not reach GitHub. Check your internet connection.';
+    state.notice = error.rateLimited ? 'rateLimited' : 'offline';
     renderBanner();
     if (!cached) render();
   } finally {
     $('refresh').classList.remove('spinning');
   }
+}
+
+async function loadReleases(app) {
+  if (state.releases[app.repo]) return;
+  state.releases[app.repo] = 'loading';
+  try {
+    const list = await getJson(`${API}/repos/${OWNER}/${app.repo}/releases?per_page=20`, 'application/vnd.github.html+json');
+    state.releases[app.repo] = list.filter((release) => !release.draft).map((release) => toRelease(release, app.installer));
+  } catch {
+    state.releases[app.repo] = 'error';
+  }
+  if (state.current === app.repo) renderDetail();
 }
 
 // --- Helpers -------------------------------------------------------------------
@@ -249,6 +321,18 @@ function statusOf(app) {
   const installed = state.installed[app.appId];
   if (!installed) return 'available';
   return compareVersions(app.version, installed.version) > 0 ? 'update' : 'installed';
+}
+
+function isNew(app) {
+  return Boolean(app.createdAt) && Date.now() - new Date(app.createdAt).getTime() < NEW_DAYS * 86400000;
+}
+
+function appById(appId) {
+  return state.apps.find((app) => app.appId === appId);
+}
+
+function appByRepo(repo) {
+  return state.apps.find((app) => app.repo === repo);
 }
 
 function el(tag, props, ...children) {
@@ -277,27 +361,76 @@ function formatSize(bytes) {
 }
 
 function formatDate(iso) {
-  return iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+  return iso ? new Date(iso).toLocaleDateString(currentLanguage, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+}
+
+function stop(handler) {
+  return (event) => { event.stopPropagation(); handler(event); };
 }
 
 // --- Actions -------------------------------------------------------------------
 
-function install(app) {
-  if (!app.asset || state.busy[app.appId]) return;
+// options: release (another version than the latest), closeApp (the app was
+// open and the user agreed to close it), confirmed (admin notice accepted).
+function install(app, options = {}) {
+  const asset = options.release ? options.release.asset : app.asset;
+  if (!asset || state.busy[app.appId]) return;
+  if (app.admin && !options.confirmed && !state.installed[app.appId]) {
+    confirmDialog(t('adminTitle'), t('adminText', { name: app.name }), t('continue'), () => install(app, { ...options, confirmed: true }), false);
+    return;
+  }
   delete state.errors[app.appId];
+  state.lastAction[app.appId] = { action: 'install', release: options.release };
   state.busy[app.appId] = { action: 'install', percent: 0 };
-  send({ type: 'install', appId: app.appId, url: app.asset.url, sha256: app.asset.sha256, fileName: app.asset.name });
+  send({
+    type: 'install', appId: app.appId, url: asset.url, sha256: asset.sha256, fileName: asset.name,
+    exe: app.exe || '', closeApp: options.closeApp ? '1' : '0',
+  });
   render();
 }
 
-function uninstall(app) {
+function uninstall(app, options = {}) {
   if (state.busy[app.appId]) return;
-  confirmDialog(`Uninstall ${app.name}?`, 'The app and its settings will be removed from this PC. You can turn it on again at any time.', 'Uninstall', () => {
+  const run = () => {
     delete state.errors[app.appId];
+    state.lastAction[app.appId] = { action: 'uninstall' };
     state.busy[app.appId] = { action: 'uninstall', percent: -1 };
-    send({ type: 'uninstall', appId: app.appId });
+    send({ type: 'uninstall', appId: app.appId, exe: app.exe || '', closeApp: options.closeApp ? '1' : '0' });
     render();
+  };
+  if (options.closeApp) run();
+  else confirmDialog(t('uninstallTitle', { name: app.name }), t('uninstallText'), t('uninstall'), run, true);
+}
+
+function retry(app) {
+  const last = state.lastAction[app.appId];
+  if (last && last.action === 'uninstall') uninstall(app, { closeApp: false });
+  else install(app, { release: last && last.release, confirmed: true });
+}
+
+function cancel(app) {
+  send({ type: 'cancel', appId: app.appId });
+}
+
+function askToCloseApp(app, action) {
+  const last = state.lastAction[app.appId] || {};
+  confirmDialog(t('runningTitle', { name: app.name }), t('runningText'), t('runningOk'), () => {
+    if (action === 'uninstall') uninstall(app, { closeApp: true });
+    else install(app, { release: last.release, closeApp: true, confirmed: true });
+  }, false, () => {
+    state.queue = state.queue.filter((id) => id !== app.appId);
+    runQueue();
   });
+}
+
+function installVersion(app, release) {
+  const installed = state.installed[app.appId];
+  if (installed && compareVersions(release.version, installed.version) < 0) {
+    confirmDialog(t('downgradeTitle', { name: app.name, v: release.version }), t('downgradeText'), t('install'),
+      () => install(app, { release, confirmed: true }), false);
+  } else {
+    install(app, { release });
+  }
 }
 
 function hubHasUpdate() {
@@ -319,27 +452,32 @@ function updatableApps() {
 
 // Installers run one at a time. Vitool Box itself is only updated from its
 // own banner, never as part of this.
-function updateAll() {
-  for (const app of updatableApps()) {
+function enqueue(apps) {
+  for (const app of apps) {
     if (!state.queue.includes(app.appId)) state.queue.push(app.appId);
   }
   runQueue();
   render();
 }
 
+function updateAll() {
+  enqueue(updatableApps());
+}
+
 function runQueue() {
-  if (Object.keys(state.busy).length) return;
+  if (Object.keys(state.busy).length || !$('dialog').hidden) return;
   const next = state.queue.shift();
   if (!next) return;
-  const app = state.apps.find((item) => item.appId === next);
-  if (app && statusOf(app) === 'update') install(app);
+  const app = appById(next);
+  if (app && statusOf(app) !== 'installed') install(app, { confirmed: true });
   else runQueue();
 }
 
 // "Update everything when Vitool Box opens": once per run, when both the
-// catalog and the installed versions are known.
+// catalog and the installed versions are known. Not while hidden at startup:
+// nobody would see the questions an update can ask.
 function maybeAutoUpdate() {
-  if (!state.settings.autoUpdate || state.autoUpdateDone || !state.catalogReady || !state.stateReady) return;
+  if (!state.settings.autoUpdate || state.hidden || state.autoUpdateDone || !state.catalogReady || !state.stateReady) return;
   state.autoUpdateDone = true;
   updateAll();
 }
@@ -349,15 +487,70 @@ function toggle(app) {
   else install(app);
 }
 
-function confirmDialog(title, text, okLabel, onOk) {
+function toggleSelection(app) {
+  if (state.installed[app.appId] && statusOf(app) !== 'update') return;
+  if (state.selected.has(app.appId)) state.selected.delete(app.appId);
+  else state.selected.add(app.appId);
+  renderGrid();
+}
+
+function setSelecting(on) {
+  state.selecting = on;
+  state.selected.clear();
+  renderGrid();
+}
+
+function installSelected() {
+  const apps = state.apps.filter((app) => state.selected.has(app.appId) && app.asset);
+  setSelecting(false);
+  enqueue(apps);
+}
+
+function confirmDialog(title, text, okLabel, onOk, danger, onCancel) {
   $('dialog-title').textContent = title;
   $('dialog-text').textContent = text;
   $('dialog-ok').textContent = okLabel;
+  $('dialog-ok').className = `button ${danger ? 'danger' : 'primary'}`;
   $('dialog').hidden = false;
   $('dialog-ok').focus();
-  const close = () => { $('dialog').hidden = true; };
+  // A queue waits while a question is open.
+  const close = () => { $('dialog').hidden = true; setTimeout(runQueue); };
   $('dialog-ok').onclick = () => { close(); onOk(); };
-  $('dialog-cancel').onclick = close;
+  $('dialog-cancel').onclick = () => { close(); if (onCancel) onCancel(); };
+}
+
+// --- Updates in the background ---------------------------------------------------
+
+function trayTip() {
+  const count = state.stateReady ? updatableApps().length : 0;
+  return count ? t('trayUpdates', { n: count }) : 'Vitool Box';
+}
+
+// Tells the host how many updates wait (tray icon dot) and, when Vitool Box
+// runs in the background, shows a notification for the ones not seen yet.
+function reportUpdates() {
+  if (!state.catalogReady) return;
+  const apps = updatableApps();
+  send({ type: 'updates', count: String(apps.length), tip: trayTip() });
+  if (!state.startup || !state.settings.notify || !apps.length) return;
+  if (!document.hidden && !state.hidden) return;
+
+  const notified = readJson(NOTIFIED_KEY, []);
+  const fresh = apps.filter((app) => !notified.includes(`${app.appId}@${app.version}`));
+  if (!fresh.length) return;
+  writeJson(NOTIFIED_KEY, [...notified, ...fresh.map((app) => `${app.appId}@${app.version}`)].slice(-200));
+  if (fresh.length === 1) {
+    send({ type: 'notify', title: t('notifyOneTitle'), text: t('notifyOneText', { name: fresh[0].name, v: fresh[0].version }) });
+  } else {
+    send({ type: 'notify', title: t('notifyManyTitle', { n: fresh.length }), text: t('notifyManyText', { names: fresh.map((app) => app.name).join(', ') }) });
+  }
+}
+
+let checkTimer = null;
+
+function scheduleChecks() {
+  clearInterval(checkTimer);
+  checkTimer = state.startup ? setInterval(loadCatalog, CHECK_HOURS * 3600 * 1000) : null;
 }
 
 // --- Rendering -----------------------------------------------------------------
@@ -365,29 +558,38 @@ function confirmDialog(title, text, okLabel, onOk) {
 function busyView(app) {
   const busy = state.busy[app.appId];
   if (!busy) return null;
+  const downloading = busy.action === 'install' && busy.percent < 100;
   const indeterminate = busy.action === 'uninstall' || busy.percent < 0 || busy.percent >= 100;
-  const label = busy.action === 'uninstall' ? 'Uninstalling…' : busy.percent >= 100 ? 'Installing…' : busy.percent >= 0 ? `Downloading ${busy.percent}%` : 'Downloading…';
+  const label = busy.action === 'uninstall' ? t('uninstalling') : busy.percent >= 100 ? t('installing')
+    : busy.percent >= 0 ? t('downloading', { p: busy.percent }) : t('downloadingPlain');
   return el('div', { class: 'busy', 'data-busy': app.appId },
-    el('span', { class: 'busy-label' }, label),
+    el('div', { class: 'busy-row' },
+      el('span', { class: 'busy-label' }, label),
+      downloading ? el('button', { class: 'link-button', onclick: stop(() => cancel(app)) }, t('cancel')) : null),
     el('div', { class: `progress${indeterminate ? ' indeterminate' : ''}` }, el('div', { style: `width:${Math.max(busy.percent, 0)}%` })));
 }
 
 function statusPill(app) {
   const status = statusOf(app);
-  const text = { available: app.asset ? 'Available' : 'No installer', installed: 'Installed', update: 'Update available' }[status];
+  const text = { available: app.asset ? t('available') : t('noInstaller'), installed: t('installed'), update: t('updateAvailable') }[status];
   return el('span', { class: `status ${status}` }, text);
 }
 
-// Updates can be started from the card itself, without opening the app.
+// The main action of a card, without opening the app: update, open or retry.
 function cardAction(app) {
-  if (statusOf(app) !== 'update' || !app.asset) return statusPill(app);
-  const queued = state.queue.includes(app.appId);
-  return el('button', {
-    class: 'button primary small',
-    disabled: queued,
-    title: `Update to ${app.version}`,
-    onclick: (event) => { event.stopPropagation(); install(app); },
-  }, queued ? 'Queued' : `Update to ${app.version}`);
+  if (state.errors[app.appId]) {
+    return el('button', { class: 'button small', title: errorText(state.errors[app.appId]), onclick: stop(() => retry(app)) }, `⚠ ${t('retry')}`);
+  }
+  if (statusOf(app) === 'update' && app.asset) {
+    const queued = state.queue.includes(app.appId);
+    return el('button', { class: 'button primary small', disabled: queued, onclick: stop(() => install(app)) },
+      queued ? t('queued') : t('updateTo', { v: app.version }));
+  }
+  if (state.queue.includes(app.appId)) return el('span', { class: 'status' }, t('queued'));
+  if (statusOf(app) === 'installed' && app.exe) {
+    return el('button', { class: 'button small', onclick: stop(() => send({ type: 'launch', appId: app.appId, exe: app.exe })) }, t('open'));
+  }
+  return statusPill(app);
 }
 
 function switchButton(app) {
@@ -396,37 +598,75 @@ function switchButton(app) {
     class: 'switch',
     role: 'switch',
     'aria-checked': String(on),
-    title: on ? 'Turn off (uninstall)' : 'Turn on (install)',
+    title: on ? t('turnOff') : t('turnOn'),
     disabled: Boolean(state.busy[app.appId]) || (!on && !app.asset),
-    onclick: (event) => { event.stopPropagation(); toggle(app); },
+    onclick: stop(() => toggle(app)),
   });
+}
+
+function selectBox(app) {
+  const selectable = !state.installed[app.appId] || statusOf(app) === 'update';
+  return el('span', { class: `checkbox${state.selected.has(app.appId) ? ' checked' : ''}${selectable ? '' : ' disabled'}` });
+}
+
+function sortApps(apps) {
+  const byName = (a, b) => a.name.localeCompare(b.name, currentLanguage);
+  const sorters = {
+    name: byName,
+    newest: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || byName(a, b),
+    updated: (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '') || byName(a, b),
+    installed: (a, b) => Number(Boolean(state.installed[b.appId])) - Number(Boolean(state.installed[a.appId])) || byName(a, b),
+  };
+  return [...apps].sort(sorters[state.settings.sort] || byName);
 }
 
 function visibleApps() {
   const query = state.query.trim().toLowerCase();
-  return state.apps.filter((app) => {
+  return sortApps(state.apps.filter((app) => {
     if (state.filter === 'installed' && !state.installed[app.appId]) return false;
     if (state.filter === 'updates' && statusOf(app) !== 'update') return false;
+    if (state.category && app.category !== state.category) return false;
     if (!query) return true;
-    return [app.name, app.tagline, app.description, app.category].some((text) => text.toLowerCase().includes(query));
-  });
+    return [app.name, app.tagline, app.description, app.category, categoryName(app.category)].some((text) => text.toLowerCase().includes(query));
+  }));
+}
+
+function renderCategories() {
+  const categories = [...new Set(state.apps.map((app) => app.category))]
+    .sort((a, b) => categoryName(a).localeCompare(categoryName(b), currentLanguage));
+  if (state.category && !categories.includes(state.category)) state.category = '';
+  const select = $('category');
+  select.replaceChildren(el('option', { value: '' }, t('allCategories')),
+    ...categories.map((category) => el('option', { value: category }, categoryName(category))));
+  select.value = state.category;
+  select.hidden = categories.length < 2;
 }
 
 function renderGrid() {
   const grid = $('grid');
-  grid.replaceChildren(...visibleApps().map((app) => el('article', { class: 'card', onclick: () => showDetail(app.repo) },
-    el('div', { class: 'card-head' }, appIcon(app),
-      el('div', {}, el('h3', {}, app.name), el('div', { class: 'category' }, app.category))),
-    el('p', {}, app.tagline),
-    el('div', { class: 'card-foot' }, busyView(app) || cardAction(app), switchButton(app)))));
-  $('update-all').hidden = updatableApps().length < 2;
+  grid.classList.toggle('selecting', state.selecting);
+  grid.replaceChildren(...visibleApps().map((app) => el('article', {
+    class: `card${state.selected.has(app.appId) ? ' selected' : ''}`,
+    onclick: () => (state.selecting ? toggleSelection(app) : showDetail(app.repo)),
+  },
+  el('div', { class: 'card-head' }, appIcon(app),
+    el('div', {}, el('h3', {}, app.name, isNew(app) ? el('span', { class: 'badge' }, t('new')) : null),
+      el('div', { class: 'category' }, categoryName(app.category)))),
+  el('p', {}, app.tagline),
+  el('div', { class: 'card-foot' }, busyView(app) || cardAction(app), state.selecting ? selectBox(app) : switchButton(app)))));
+
+  $('update-all').hidden = state.selecting || updatableApps().length < 2;
+  $('select-mode').hidden = state.selecting || !state.apps.some((app) => !state.installed[app.appId] && app.asset);
+  $('selection-bar').hidden = !state.selecting;
+  $('selection-text').textContent = state.selected.size ? t('selected', { n: state.selected.size }) : t('selectHint');
+  $('selection-install').disabled = state.selected.size === 0;
 
   const empty = $('empty');
   empty.hidden = grid.children.length > 0;
-  if (!state.apps.length) empty.textContent = state.notice ? 'No apps to show yet.' : 'Looking for apps…';
-  else if (state.filter === 'installed' && !state.query) empty.textContent = 'You have no apps turned on yet. Pick one from All apps.';
-  else if (state.filter === 'updates' && !state.query) empty.textContent = 'Everything is up to date. ✨';
-  else empty.textContent = 'No apps match your search.';
+  if (!state.apps.length) empty.textContent = state.notice ? t('noAppsYet') : t('lookingForApps');
+  else if (state.filter === 'installed' && !state.query) empty.textContent = t('noneInstalled');
+  else if (state.filter === 'updates' && !state.query) empty.textContent = t('allUpToDate');
+  else empty.textContent = t('noMatch');
 }
 
 function detailActions(app) {
@@ -436,14 +676,23 @@ function detailActions(app) {
   if (busy) {
     actions.append(busy);
   } else if (!installed) {
-    actions.append(el('button', { class: 'button primary', disabled: !app.asset, onclick: () => install(app) }, 'Install'));
+    actions.append(el('button', { class: 'button primary', disabled: !app.asset, onclick: () => install(app) }, t('install')));
   } else {
-    if (statusOf(app) === 'update') actions.append(el('button', { class: 'button primary', onclick: () => install(app) }, `Update to ${app.version}`));
-    if (app.exe) actions.append(el('button', { class: statusOf(app) === 'update' ? 'button' : 'button primary', onclick: () => send({ type: 'launch', appId: app.appId, exe: app.exe }) }, 'Open'));
-    actions.append(el('button', { class: 'button danger', onclick: () => uninstall(app) }, 'Uninstall'));
+    if (statusOf(app) === 'update') actions.append(el('button', { class: 'button primary', onclick: () => install(app) }, t('updateTo', { v: app.version })));
+    if (app.exe) {
+      actions.append(el('button', { class: statusOf(app) === 'update' ? 'button' : 'button primary', onclick: () => send({ type: 'launch', appId: app.appId, exe: app.exe }) }, t('open')));
+    }
+    actions.append(el('button', { class: 'button danger', onclick: () => uninstall(app) }, t('uninstall')));
+    actions.append(el('div', { class: 'secondary-actions' },
+      el('button', { class: 'link-button', onclick: () => send({ type: 'openFolder', appId: app.appId }) }, t('openFolder')),
+      statusOf(app) === 'installed' && app.asset ? el('button', { class: 'link-button', onclick: () => install(app, { confirmed: true }) }, t('repair')) : null));
   }
-  if (state.errors[app.appId]) actions.append(el('div', { class: 'error' }, state.errors[app.appId]));
-  if (!app.asset) actions.append(el('div', { class: 'error' }, 'This release has no verified installer.'));
+  if (state.errors[app.appId] && !busy) {
+    actions.append(el('div', { class: 'error' }, errorText(state.errors[app.appId]), ' ',
+      el('button', { class: 'link-button', onclick: () => retry(app) }, t('retry'))));
+  }
+  if (!app.asset) actions.append(el('div', { class: 'error' }, t('noVerified')));
+  if (app.admin && !installed) actions.append(el('div', { class: 'note' }, t('adminNote')));
   return actions;
 }
 
@@ -480,13 +729,39 @@ async function loadReadme(app) {
     if (!response.ok) throw new Error();
     state.readmes[app.repo] = sanitize(await response.text(), app);
   } catch {
-    state.readmes[app.repo] = `<p class="loading">${app.description ? '' : 'Could not load the description.'}</p>`;
+    state.readmes[app.repo] = `<p class="loading">${app.description ? '' : t('noDescription')}</p>`;
   }
   if (state.current === app.repo) renderDetail();
 }
 
+function versionsView(app) {
+  const releases = state.releases[app.repo];
+  if (!releases || releases === 'loading') {
+    loadReleases(app);
+    return el('p', { class: 'loading' }, t('loading'));
+  }
+  if (releases === 'error') return el('p', { class: 'loading' }, t('versionsError'));
+  const installed = state.installed[app.appId];
+  return el('div', { class: 'versions' }, releases.map((release, index) => {
+    const notes = el('div', { class: 'markdown' });
+    notes.innerHTML = release.notesHtml ? sanitize(release.notesHtml, app) : `<p class="loading">${t('noNotes')}</p>`;
+    const isInstalled = installed && compareVersions(installed.version, release.version) === 0;
+    let action = null;
+    if (isInstalled) action = el('span', { class: 'status installed' }, t('installed'));
+    else if (release.asset && !state.busy[app.appId]) action = el('button', { class: 'button small', onclick: () => installVersion(app, release) }, t('installThis'));
+    return el('details', { class: 'version', open: index === 0 },
+      el('summary', {},
+        el('strong', {}, release.version),
+        index === 0 ? el('span', { class: 'badge' }, t('latest')) : null,
+        el('span', { class: 'version-date' }, formatDate(release.date)),
+        el('span', { class: 'spacer' }),
+        action),
+      notes);
+  }));
+}
+
 function renderDetail() {
-  const app = state.apps.find((item) => item.repo === state.current);
+  const app = appByRepo(state.current);
   const detail = $('detail');
   if (!app) {
     showHome();
@@ -494,26 +769,31 @@ function renderDetail() {
   }
   const installed = state.installed[app.appId];
   const meta = el('div', { class: 'meta' },
-    el('span', {}, `Version ${app.version}`),
-    installed && installed.version !== app.version ? el('span', {}, `Installed ${installed.version}`) : null,
-    el('span', {}, `Updated ${formatDate(app.updatedAt)}`),
+    el('span', {}, t('version', { v: app.version })),
+    installed && installed.version !== app.version ? el('span', {}, t('installedVersion', { v: installed.version })) : null,
+    el('span', {}, t('updated', { d: formatDate(app.updatedAt) })),
     app.asset ? el('span', {}, formatSize(app.asset.size)) : null,
-    el('span', {}, app.category));
+    el('span', {}, categoryName(app.category)));
 
-  const tabs = el('div', { class: 'tabs' },
-    ['about', 'notes'].map((tab) => el('button', {
-      class: state.tab === tab ? 'active' : '',
-      onclick: () => { state.tab = tab; renderDetail(); },
-    }, tab === 'about' ? 'About' : `What's new in ${app.version}`)));
+  const tabNames = { about: t('about'), notes: t('notes', { v: app.version }), versions: t('versions') };
+  const tabs = el('div', { class: 'tabs' }, Object.entries(tabNames).map(([tab, label]) => el('button', {
+    class: state.tab === tab ? 'active' : '',
+    onclick: () => { state.tab = tab; renderDetail(); },
+  }, label)));
 
-  const body = el('div', { class: 'markdown' });
-  if (state.tab === 'notes') {
-    body.innerHTML = app.notesHtml ? sanitize(app.notesHtml, app) : '<p class="loading">No release notes.</p>';
-  } else if (state.readmes[app.repo]) {
-    body.innerHTML = state.readmes[app.repo];
+  let body;
+  if (state.tab === 'versions') {
+    body = versionsView(app);
   } else {
-    body.append(el('p', { class: 'loading' }, 'Loading…'));
-    loadReadme(app);
+    body = el('div', { class: 'markdown' });
+    if (state.tab === 'notes') {
+      body.innerHTML = app.notesHtml ? sanitize(app.notesHtml, app) : `<p class="loading">${t('noNotes')}</p>`;
+    } else if (state.readmes[app.repo]) {
+      body.innerHTML = state.readmes[app.repo];
+    } else {
+      body.append(el('p', { class: 'loading' }, t('loading')));
+      loadReadme(app);
+    }
   }
   body.querySelectorAll('a[href]').forEach((link) => link.addEventListener('click', (event) => {
     event.preventDefault();
@@ -523,10 +803,10 @@ function renderDetail() {
   detail.replaceChildren(...[
     el('div', { class: 'detail-head' }, appIcon(app, true),
       el('div', { class: 'info' }, el('h1', {}, app.name), el('p', { class: 'tagline' }, app.tagline), meta,
-        el('p', {}, el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); send({ type: 'openUrl', url: app.homepage }); } }, 'View on GitHub'))),
+        el('p', {}, el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); send({ type: 'openUrl', url: app.homepage }); } }, t('viewOnGitHub')))),
       detailActions(app)),
     app.screenshots.length ? el('div', { class: 'screenshots' }, app.screenshots.map((src) => {
-      const image = el('img', { src, alt: `${app.name} screenshot`, loading: 'lazy', onclick: () => openLightbox(src) });
+      const image = el('img', { src, alt: t('screenshot', { name: app.name }), loading: 'lazy', onclick: () => openLightbox(src) });
       image.addEventListener('error', () => image.remove());
       return image;
     })) : null,
@@ -537,7 +817,7 @@ function renderDetail() {
 function renderBusy(appId) {
   // Progress updates touch only the progress bars, not the whole page.
   document.querySelectorAll(`[data-busy="${CSS.escape(appId)}"]`).forEach((node) => {
-    const app = state.apps.find((item) => item.appId === appId);
+    const app = appById(appId);
     if (app) node.replaceWith(busyView(app));
   });
 }
@@ -546,7 +826,7 @@ function renderBanner() {
   const banner = $('banner');
   if (state.notice) {
     banner.className = 'banner warning';
-    banner.replaceChildren(el('span', {}, state.notice));
+    banner.replaceChildren(el('span', {}, t(state.notice)));
     banner.hidden = false;
   } else if (hubHasUpdate()) {
     const busy = state.busy.hub;
@@ -555,21 +835,21 @@ function renderBanner() {
     if (busy) {
       const percent = busy.percent;
       action = el('div', { class: 'busy banner-busy' },
-        el('span', { class: 'busy-label' }, percent >= 0 && percent < 100 ? `Downloading ${percent}%` : 'Restarting to update…'),
+        el('span', { class: 'busy-label' }, percent >= 0 && percent < 100 ? t('downloading', { p: percent }) : t('restarting')),
         el('div', { class: `progress${percent < 0 || percent >= 100 ? ' indeterminate' : ''}` }, el('div', { style: `width:${Math.max(percent, 0)}%` })));
     } else if (state.hubLatest.asset) {
       const appsBusy = Object.keys(state.busy).length > 0 || state.queue.length > 0;
       action = el('button', {
         class: 'button primary',
         disabled: appsBusy,
-        title: appsBusy ? 'Available once the current installs finish' : null,
+        title: appsBusy ? t('waitInstalls') : null,
         onclick: selfUpdate,
-      }, 'Update and restart');
+      }, t('updateRestart'));
     } else {
-      action = el('button', { class: 'button primary', onclick: () => send({ type: 'openUrl', url: state.hubLatest.url }) }, 'Download');
+      action = el('button', { class: 'button primary', onclick: () => send({ type: 'openUrl', url: state.hubLatest.url }) }, t('download'));
     }
     banner.replaceChildren(
-      el('span', {}, `Vitool Box ${state.hubLatest.version} is available.`, state.errors.hub ? el('span', { class: 'error' }, ` ${state.errors.hub}`) : null),
+      el('span', {}, t('hubAvailable', { v: state.hubLatest.version }), state.errors.hub ? el('span', { class: 'error' }, ` ${errorText(state.errors.hub)}`) : null),
       action);
     banner.hidden = false;
   } else {
@@ -577,29 +857,77 @@ function renderBanner() {
   }
 }
 
+function settingSwitch(id, on, disabled, onchange) {
+  return el('button', { class: 'switch', role: 'switch', id, 'aria-checked': String(on), disabled, onclick: onchange });
+}
+
+function settingRow(id, title, text, control) {
+  return el('div', { class: 'setting' }, el('label', { for: id }, el('strong', {}, title), el('span', {}, text)), control);
+}
+
+// "name\tappId\texe\tentry…" lines: the apps whose settings can be backed up.
+function backupSpec() {
+  return state.apps.filter((app) => app.settings.length)
+    .map((app) => [app.repo, app.appId, app.exe || '', ...app.settings].join('\t')).join('\n');
+}
+
 function renderSettings() {
-  const autoUpdate = el('button', {
-    class: 'switch',
-    role: 'switch',
-    id: 'auto-update',
-    'aria-checked': String(state.settings.autoUpdate),
-    onclick: () => {
+  const language = el('select', {
+    class: 'select', id: 'language',
+    onchange: (event) => {
+      state.settings.language = event.target.value;
+      writeSettings();
+      applyLanguage();
+    },
+  }, el('option', { value: 'auto' }, t('languageAuto')),
+  Object.entries(LANGUAGES).map(([code, name]) => el('option', { value: code }, name)));
+  language.value = state.settings.language;
+
+  const backupBusy = state.backupMessage && state.backupMessage.working;
+  const message = state.backupMessage && !backupBusy
+    ? el('p', { class: state.backupMessage.error ? 'error' : 'note' }, state.backupMessage.text) : null;
+
+  $('settings').replaceChildren(
+    el('h1', { class: 'page-title' }, t('settings')),
+    el('h2', { class: 'section-title' }, t('general')),
+    settingRow('language', t('language'), '', language),
+    settingRow('startup', t('startup'), t('startupText'), settingSwitch('startup', state.startup, false, () => {
+      send({ type: 'startup', enabled: state.startup ? '0' : '1' });
+    })),
+    settingRow('notify', t('notify'), t('notifyText'), settingSwitch('notify', state.settings.notify && state.startup, !state.startup, () => {
+      state.settings.notify = !state.settings.notify;
+      writeSettings();
+      renderSettings();
+    })),
+    settingRow('auto-update', t('autoUpdate'), t('autoUpdateText'), settingSwitch('auto-update', state.settings.autoUpdate, false, () => {
       state.settings.autoUpdate = !state.settings.autoUpdate;
       writeSettings();
       renderSettings();
-    },
-  });
-  $('settings').replaceChildren(
-    el('h1', { class: 'page-title' }, 'Settings'),
+    })),
+    el('h2', { class: 'section-title' }, t('backupSection')),
     el('div', { class: 'setting' },
-      el('label', { for: 'auto-update' },
-        el('strong', {}, 'Update everything when Vitool Box opens'),
-        el('span', {}, 'Installs the available updates of your apps each time you open it. Vitool Box itself is updated from its banner.')),
-      autoUpdate),
-    el('h2', { class: 'section-title' }, 'About'),
+      el('div', {}, el('span', {}, t('backupText')), message),
+      el('div', { class: 'setting-buttons' },
+        el('button', { class: 'button', disabled: backupBusy, onclick: startBackup }, backupBusy ? t('working') : t('backupButton')),
+        el('button', { class: 'button', disabled: backupBusy, onclick: startRestore }, t('restoreButton')))),
+    el('h2', { class: 'section-title' }, t('about')),
     el('div', { class: 'setting' },
-      el('div', {}, el('strong', {}, `Vitool Box ${state.hubVersion || ''}`), el('span', {}, 'All VitomDev apps in one place. MIT licensed.')),
-      el('button', { class: 'button', onclick: () => send({ type: 'openUrl', url: `https://github.com/${OWNER}/${HUB_REPO}` }) }, 'View on GitHub')));
+      el('div', {}, el('strong', {}, `Vitool Box ${state.hubVersion || ''}`), el('span', {}, t('aboutText'))),
+      el('button', { class: 'button', onclick: () => send({ type: 'openUrl', url: `https://github.com/${OWNER}/${HUB_REPO}` }) }, t('viewOnGitHub'))));
+}
+
+function startBackup() {
+  state.backupMessage = { working: true };
+  renderSettings();
+  send({ type: 'backup', spec: backupSpec() });
+}
+
+function startRestore() {
+  confirmDialog(t('restoreTitle'), t('restoreText'), t('restore'), () => {
+    state.backupMessage = { working: true };
+    renderSettings();
+    send({ type: 'restore', spec: backupSpec() });
+  }, false);
 }
 
 function render() {
@@ -638,14 +966,28 @@ function openLightbox(src) {
   lightbox.hidden = false;
 }
 
+function applyLanguage() {
+  setLanguage(state.settings.language);
+  renderCategories();
+  render();
+  sendHostStrings();
+}
+
 // --- Start ---------------------------------------------------------------------
 
 state.settings = readSettings();
+setLanguage(state.settings.language);
+$('sort').value = state.settings.sort;
 $('back').addEventListener('click', showHome);
 $('open-settings').addEventListener('click', () => setView('settings'));
 $('update-all').addEventListener('click', updateAll);
+$('select-mode').addEventListener('click', () => setSelecting(true));
+$('selection-cancel').addEventListener('click', () => setSelecting(false));
+$('selection-install').addEventListener('click', installSelected);
 $('refresh').addEventListener('click', () => loadCatalog());
 $('search').addEventListener('input', (event) => { state.query = event.target.value; renderGrid(); });
+$('category').addEventListener('change', (event) => { state.category = event.target.value; renderGrid(); });
+$('sort').addEventListener('change', (event) => { state.settings.sort = event.target.value; writeSettings(); renderGrid(); });
 $('lightbox').addEventListener('click', () => { $('lightbox').hidden = true; });
 document.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
   document.querySelectorAll('.chip').forEach((other) => other.classList.toggle('active', other === chip));
@@ -655,11 +997,19 @@ document.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('clic
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!$('lightbox').hidden) $('lightbox').hidden = true;
-  else if (!$('dialog').hidden) $('dialog').hidden = true;
+  else if (!$('dialog').hidden) $('dialog-cancel').click();
+  else if (state.selecting) setSelecting(false);
   else if (state.view !== 'home') showHome();
 });
 // The installed list can change outside the hub (e.g. Settings > Apps).
 window.addEventListener('focus', () => { if (state.apps.length) refreshInstalled(); });
+// Shown for the first time after a hidden start: run what was held back.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !state.hidden) return;
+  state.hidden = false;
+  maybeAutoUpdate();
+});
 
 send({ type: 'hello' });
+sendHostStrings();
 loadCatalog();

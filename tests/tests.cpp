@@ -2,6 +2,7 @@
 //
 //   VitoolBoxTests.exe
 
+#include "core/backup.h"
 #include "core/download.h"
 #include "core/json.h"
 #include "core/packages.h"
@@ -134,6 +135,78 @@ TEST(InstallRejectsBadReleaseData) {
     CHECK(!InstallApp(id, L"https://example.com/Setup.exe", sha, L"Setup.exe", nullptr).empty());
     CHECK(!InstallApp(id, L"https://github.com/VitomDev/R/releases/download/v1/Setup.exe", "bad", L"Setup.exe", nullptr).empty());
     CHECK(!InstallApp(id, L"https://github.com/VitomDev/R/releases/download/v1/Setup.zip", sha, L"Setup.zip", nullptr).empty());
+}
+
+TEST(SettingsEntriesStayInTheirPlace) {
+    CHECK(IsValidSettingsEntry(L"%APPDATA%\\MuraConverter"));
+    CHECK(IsValidSettingsEntry(L"%LOCALAPPDATA%\\Kodo QR Instant"));
+    CHECK(IsValidSettingsEntry(L"HKCU\\Software\\Vela System Monitor"));
+    CHECK(!IsValidSettingsEntry(L"%APPDATA%\\..\\Startup"));
+    CHECK(!IsValidSettingsEntry(L"%APPDATA%\\Microsoft\\Windows"));
+    CHECK(!IsValidSettingsEntry(L"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
+    CHECK(!IsValidSettingsEntry(L"HKLM\\Software\\Vela"));
+    CHECK(!IsValidSettingsEntry(L"C:\\Windows"));
+}
+
+TEST(BackupSpecIsParsed) {
+    const auto apps = ParseBackupSpec(L"Vela\t{9E3B6A14-2C7D-4F58-B1A9-6D0E8F2C4B37}\tVela.exe\tHKCU\\Software\\Vela System Monitor\t%APPDATA%\\..\n"
+                                      L"..\\bad\t{9E3B6A14-2C7D-4F58-B1A9-6D0E8F2C4B37}\tx.exe\t%APPDATA%\\X\n"
+                                      L"NoEntries\t{9E3B6A14-2C7D-4F58-B1A9-6D0E8F2C4B37}\tx.exe");
+    CHECK(apps.size() == 1);
+    CHECK(apps[0].name == L"Vela");
+    CHECK(apps[0].exe == L"Vela.exe");
+    CHECK(apps[0].entries.size() == 1);
+}
+
+TEST(RestoredRegistryFilesAreChecked) {
+    const std::wstring key = L"HKEY_CURRENT_USER\\Software\\Vela System Monitor";
+    CHECK(RegFileOnlyTouches(L"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\Vela System Monitor]\r\n\"A\"=dword:00000001\r\n"
+                             L"[HKEY_CURRENT_USER\\Software\\Vela System Monitor\\Sub]\r\n", key));
+    CHECK(!RegFileOnlyTouches(L"Windows Registry Editor Version 5.00\r\n[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]\r\n", key));
+    CHECK(!RegFileOnlyTouches(L"Windows Registry Editor Version 5.00\r\n[HKEY_CURRENT_USER\\Software\\Vela System Monitor Evil]\r\n", key));
+    CHECK(!RegFileOnlyTouches(L"Windows Registry Editor Version 5.00\r\n[-HKEY_CURRENT_USER\\Software]\r\n", key));
+    CHECK(!RegFileOnlyTouches(L"[HKEY_CURRENT_USER\\Software\\Vela System Monitor]\r\n", key));
+}
+
+// Round trip through a real archive with tar.exe and reg.exe, on a test
+// registry key and a test folder in %LOCALAPPDATA%.
+TEST(SettingsBackupRoundTrip) {
+    const wchar_t* key = L"Software\\VitoolBox Backup Test";
+    wchar_t localAppData[MAX_PATH];
+    GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
+    const auto folder = fs::path(localAppData) / L"VitoolBox Backup Test";
+    const auto zip = fs::temp_directory_path() / L"vitoolbox-backup-test.zip";
+    const DWORD value = 42;
+    RegSetKeyValueW(HKEY_CURRENT_USER, key, L"Answer", REG_DWORD, &value, sizeof(value));
+    fs::create_directories(folder / L"sub");
+    std::ofstream(folder / L"sub" / L"notes.txt") << "hello";
+
+    const std::vector<BackupApp> apps{{L"TestApp", L"{00000000-0000-0000-0000-000000000000}", L"",
+                                       {L"%LOCALAPPDATA%\\VitoolBox Backup Test", L"HKCU\\Software\\VitoolBox Backup Test"}}};
+    std::vector<std::wstring> saved;
+    CHECK(BackupSettings(apps, zip, saved).empty());
+    CHECK(saved.size() == 1);
+
+    RegDeleteTreeW(HKEY_CURRENT_USER, key);
+    fs::remove_all(folder);
+    int before = 0, after = 0;
+    std::vector<std::wstring> restored;
+    CHECK(RestoreSettings(zip, apps, [&](const BackupApp&) { ++before; }, [&](const BackupApp&) { ++after; }, restored).empty());
+    CHECK(restored.size() == 1 && before == 1 && after == 1);
+
+    DWORD read = 0;
+    DWORD size = sizeof(read);
+    CHECK(RegGetValueW(HKEY_CURRENT_USER, key, L"Answer", RRF_RT_REG_DWORD, nullptr, &read, &size) == ERROR_SUCCESS && read == 42);
+    std::string text;
+    std::ifstream(folder / L"sub" / L"notes.txt") >> text;
+    CHECK(text == "hello");
+
+    std::vector<std::wstring> none;
+    CHECK(RestoreSettings(folder / L"sub" / L"notes.txt", apps, nullptr, nullptr, none) == L"notABackup");
+
+    RegDeleteTreeW(HKEY_CURRENT_USER, key);
+    fs::remove_all(folder);
+    fs::remove(zip);
 }
 
 TEST(TextHelpers) {

@@ -14,10 +14,13 @@ add_compile_options(/W4 /WX /permissive- /sdl /utf-8 /guard:cf /external:anglebr
 add_link_options(/guard:cf /CETCOMPAT /OPT:REF /OPT:ICF)
 
 add_library(vitoolcore STATIC
+    src/core/backup.cpp
     src/core/download.cpp
     src/core/json.cpp
     src/core/packages.cpp
     src/core/paths.cpp
+    src/core/processes.cpp
+    src/core/startup.cpp
     src/core/text.cpp
 )
 target_include_directories(vitoolcore PUBLIC src)
@@ -29,7 +32,7 @@ add_executable(VitoolBox WIN32
     src/app/VitoolBox.rc
 )
 target_include_directories(VitoolBox SYSTEM PRIVATE ${VITOOL_WEBVIEW2_SDK}/build/native/include)
-target_link_libraries(VitoolBox PRIVATE vitoolcore user32 dwmapi version
+target_link_libraries(VitoolBox PRIVATE vitoolcore user32 gdi32 dwmapi version uuid
     ${VITOOL_WEBVIEW2_SDK}/build/native/x64/WebView2LoaderStatic.lib)
 # The manifest is embedded through VitoolBox.rc.
 target_link_options(VitoolBox PRIVATE /MANIFEST:NO)

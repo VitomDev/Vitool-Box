@@ -5,7 +5,7 @@
 ;
 ; Built by build.ps1, which passes /DBuildDir=<folder with VitoolBox.exe>.
 
-#define AppVersion "1.1.1"
+#define AppVersion "1.2.0"
 #define AppName "Vitool Box"
 
 #ifndef BuildDir
@@ -50,6 +50,10 @@ Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 [InstallDelete]
 ; Files of an older UI that the new one no longer has.
 Type: filesandordirs; Name: "{app}\ui"
+
+[Registry]
+; "Start with Windows" is turned on from Vitool Box's settings.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Vitool Box"; Flags: uninsdeletevalue dontcreatekey
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\VitoolBox.exe"

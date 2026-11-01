@@ -12,12 +12,19 @@ Browse the apps, read what each one does, and turn on the ones you want: Vitool 
 
 - 🗂️ **App catalog**: every Vitool Box app with its icon, description, screenshots and release notes
 - 🔘 **Turn apps on and off**: on downloads and installs the app, off uninstalls it. No setup wizards
-- ⬆️ **Updates**: see when a newer version is out and update with one click, right from the app list, or all at once
+- ☑️ **Install several at once**: pick them and they install one after another
+- ⬆️ **Updates**: update with one click right from the app list, or all at once
+- 🔔 **Update notifications**: starts with Windows, waits in the notification area and lets you know when there are updates
+- 🕰️ **Version history**: read the notes of every release and go back to an older version if a new one gives you trouble
 - 🔄 **Updates itself**: Vitool Box downloads its new version and restarts into it
 - 🤖 **Optional auto-update**: install your apps' updates every time you open Vitool Box
-- ✨ **New apps appear automatically**, without updating Vitool Box
-- 🔍 **Search** and filter by *Installed* or *Updates*
-- ▶️ **Open** installed apps straight from their page
+- 💾 **Settings backup**: save the settings of your apps to a file and restore them later or on another PC
+- ✨ **New apps appear automatically**, without updating Vitool Box, with a *New* badge
+- 🔍 **Search**, filter by *Installed*, *Updates* or category, and sort by name, newest or recently updated
+- ▶️ **Open** installed apps straight from their card, open their folder or repair them
+- 🧹 **Closes open apps** before updating them and starts them again afterwards
+- ⏸️ **Cancel** a download and **retry** when something fails
+- 🌍 **10 languages**: English, Español, Português (Brasil), Français, Deutsch, Italiano, Polski, 日本語, 한국어 and 简体中文
 - 🛡️ **Safe downloads**: only official VitomDev releases, each checked against its SHA-256 checksum before it runs
 - 👀 Notices apps you installed or removed by other means (Settings → Apps)
 - 🌙 Clean Windows 11 look that follows your light or dark theme
@@ -43,15 +50,22 @@ Uninstalling Vitool Box (Settings → Apps) keeps the apps you installed with it
 | Install an app | Turn on its switch, or open it and click **Install** |
 | Uninstall an app | Turn off its switch, or open it and click **Uninstall** |
 | Update an app | Click **Update to x.y.z** on its card or its page |
+| Install several apps | **Select several**, pick them and click **Install selected** |
 | Update every app | **Update all** (shown when several apps have updates) |
+| Go back to an older version | Open the app, **Versions** tab, **Install this version** |
 | Update Vitool Box | **Update and restart** on the banner at the top |
-| Open an installed app | Open its page and click **Open** |
+| Open an installed app | **Open** on its card or its page |
+| Open its folder or repair it | **Open folder** / **Repair** on its page |
 | Refresh the catalog | ⟳ button at the top right |
 | Settings | ⚙️ button at the top right |
 
 ### ⚙️ Settings
 
+- **Language**: the same as Windows, or any of the 10 languages
+- **Start with Windows** (off by default): keeps Vitool Box in the notification area and checks for updates every few hours. Closing the window hides it there; **Quit** is in the icon's menu
+- **Update notifications** (on with Start with Windows): a Windows notification when your apps have updates. The icon also gets a dot
 - **Update everything when Vitool Box opens** (off by default): installs your apps' updates each time you open Vitool Box. Vitool Box itself is always updated by hand, from its banner
+- **Settings backup**: **Back up…** saves the settings of your apps to a `.zip`; **Restore…** puts them back (open apps are closed and started again)
 
 Some apps (like Iris Image) install for all users, so Windows asks for administrator permission when you turn them on.
 
@@ -76,7 +90,8 @@ An app shows up in Vitool Box when its GitHub repository under **VitomDev**:
   "icon": "assets/kodo.png",
   "screenshots": ["assets/screenshots/reader.png"],
   "installer": "KodoSetup.exe",
-  "exe": "Kodo.exe"
+  "exe": "Kodo.exe",
+  "settings": ["%LOCALAPPDATA%\\Kodo QR Instant", "HKCU\\Software\\Kodo QR Instant"]
 }
 ```
 
@@ -87,6 +102,8 @@ An app shows up in Vitool Box when its GitHub repository under **VitomDev**:
 | `icon`, `screenshots` | Paths in the repository (or full `https://` URLs) |
 | `installer` | Name of the release asset; `*` matches anything (e.g. `App-Setup-*.exe`). Defaults to the first `.exe` with "setup" in its name |
 | `exe` | Program started by **Open**, relative to the install folder |
+| `settings` | Optional. What **Settings backup** saves: `%APPDATA%\Folder`, `%LOCALAPPDATA%\Folder` or `HKCU\Software\Key` |
+| `admin` | Optional. `true` when the installer needs administrator rights, so Vitool Box warns before installing |
 
 The installer has to support Inno Setup's silent mode (`/VERYSILENT`), which all of them do by default. The app page shows the repository's README and the release notes.
 

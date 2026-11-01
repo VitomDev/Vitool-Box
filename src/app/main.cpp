@@ -5,6 +5,7 @@
 #include <WebView2.h>
 
 #include "app/hub_window.h"
+#include "core/startup.h"
 
 namespace {
 
@@ -20,12 +21,16 @@ bool HasWebView2Runtime() {
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
+    const bool background = commandLine && wcsstr(commandLine, vitool::kBackgroundArgument);
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND existing = FindWindowW(vitool::HubWindow::kClassName, nullptr)) {
-            if (IsIconic(existing)) ShowWindow(existing, SW_RESTORE);
-            SetForegroundWindow(existing);
+        // The running one may be hidden in the notification area: ask it to show itself.
+        if (HWND existing = FindWindowW(vitool::HubWindow::kClassName, nullptr); existing && !background) {
+            DWORD processId = 0;
+            GetWindowThreadProcessId(existing, &processId);
+            AllowSetForegroundWindow(processId);
+            PostMessageW(existing, vitool::HubWindow::kShowMessage, 0, 0);
         }
         return 0;
     }
@@ -43,7 +48,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     vitool::HubWindow window;
-    if (!window.Create(instance)) return 1;
+    if (!window.Create(instance, background)) return 1;
 
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

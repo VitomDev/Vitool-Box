@@ -1,14 +1,18 @@
 #include "app/hub_window.h"
 
 #include <dwmapi.h>
-#include <shellapi.h>
+#include <shobjidl.h>
 
+#include <cmath>
 #include <thread>
+#include <vector>
 
 #include "app/resource.h"
-#include "core/json.h"
+#include "core/backup.h"
 #include "core/packages.h"
 #include "core/paths.h"
+#include "core/processes.h"
+#include "core/startup.h"
 #include "core/text.h"
 #include "version.h"
 
@@ -21,6 +25,11 @@ namespace {
 constexpr UINT WM_APP_POST = WM_APP + 1;
 constexpr UINT WM_APP_OPERATION_DONE = WM_APP + 2;
 constexpr UINT WM_APP_QUIT_FOR_UPDATE = WM_APP + 3;
+constexpr UINT WM_APP_TRAY = WM_APP + 4;
+constexpr UINT kTrayId = 1;
+constexpr UINT kMenuOpen = 1;
+constexpr UINT kMenuCheck = 2;
+constexpr UINT kMenuQuit = 3;
 constexpr wchar_t kSelfUpdatePrefix[] = L"https://github.com/VitomDev/Vitool-Box/releases/download/";
 constexpr wchar_t kHost[] = L"hub.vitool";
 constexpr wchar_t kStartPage[] = L"https://hub.vitool/index.html";
@@ -47,15 +56,86 @@ std::string Field(const JsonObject& object, const char* key) {
     return it == object.end() ? std::string() : it->second;
 }
 
+// Posts JSON to the page from a worker thread.
+auto PosterFor(HWND window) {
+    return [window](std::string json) {
+        auto* heap = new std::string(std::move(json));
+        if (!PostMessageW(window, WM_APP_POST, 0, reinterpret_cast<LPARAM>(heap))) delete heap;
+    };
+}
+
+std::string JoinUtf8(const std::vector<std::wstring>& items) {
+    std::string result;
+    for (const auto& item : items) result += (result.empty() ? "" : ",") + WideToUtf8(item);
+    return result;
+}
+
+// The app icon with a dot in the corner: updates are waiting.
+HICON MakeBadgeIcon(HICON base) {
+    const int size = GetSystemMetrics(SM_CXSMICON);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB};
+    void* bits = nullptr;
+    HBITMAP color = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!color) return nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, color);
+    DrawIconEx(dc, 0, 0, base, size, size, 0, nullptr, DI_NORMAL);
+    SelectObject(dc, old);
+    DeleteDC(dc);
+
+    auto* pixels = static_cast<uint32_t*>(bits);
+    const double radius = size * 0.24;
+    const double center = size - radius - 0.5;
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            const double distance = std::hypot(x - center, y - center);
+            if (distance <= radius + 1.2) pixels[y * size + x] = distance <= radius ? 0xFFE8485Au : 0xFFFFFFFFu;
+        }
+    }
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
+    ICONINFO iconInfo{TRUE, 0, 0, mask, color};
+    HICON icon = CreateIconIndirect(&iconInfo);
+    DeleteObject(mask);
+    DeleteObject(color);
+    return icon;
+}
+
+std::filesystem::path PickZip(HWND owner, bool save, const std::wstring& suggestedName) {
+    ComPtr<IFileDialog> dialog;
+    if (FAILED(CoCreateInstance(save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+        return {};
+    }
+    const COMDLG_FILTERSPEC filter[] = {{L"Zip", L"*.zip"}};
+    dialog->SetFileTypes(1, filter);
+    dialog->SetDefaultExtension(L"zip");
+    if (save) dialog->SetFileName(suggestedName.c_str());
+    if (FAILED(dialog->Show(owner))) return {};
+    ComPtr<IShellItem> item;
+    PWSTR path = nullptr;
+    std::filesystem::path result;
+    if (SUCCEEDED(dialog->GetResult(&item)) && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) result = path;
+    CoTaskMemFree(path);
+    return result;
+}
+
 }  // namespace
 
-bool HubWindow::Create(HINSTANCE instance) {
+bool HubWindow::Create(HINSTANCE instance, bool hidden) {
     CleanDownloads();
+    instance_ = instance;
+    startedHidden_ = hidden;
+    keepInTray_ = StartsWithWindows();
+    taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
+    icon_ = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                          GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+    badgeIcon_ = MakeBadgeIcon(icon_);
+
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance;
     windowClass.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP));
-    windowClass.hIconSm = windowClass.hIcon;
+    windowClass.hIconSm = icon_;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     windowClass.lpszClassName = kClassName;
     darkMode_ = SystemUsesDarkMode();
@@ -76,7 +156,8 @@ bool HubWindow::Create(HINSTANCE instance) {
 
     const BOOL dark = darkMode_;
     DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-    ShowWindow(window_, SW_SHOWNORMAL);
+    if (!hidden) ShowWindow(window_, SW_SHOWNORMAL);
+    SetTrayVisible(keepInTray_);
     CreateWebView();
     return true;
 }
@@ -92,7 +173,36 @@ LRESULT CALLBACK HubWindow::WindowProc(HWND window, UINT message, WPARAM wParam,
 }
 
 LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == taskbarCreated_ && trayVisible_) {
+        // Explorer restarted: the icon has to be added again.
+        trayVisible_ = false;
+        SetTrayVisible(true);
+        return 0;
+    }
     switch (message) {
+        case kShowMessage:
+            ShowHub();
+            return 0;
+        case WM_APP_TRAY:
+            switch (LOWORD(lParam)) {
+                case NIN_SELECT:
+                case NIN_KEYSELECT:
+                    ShowHub();
+                    break;
+                case NIN_BALLOONUSERCLICK:
+                    ShowHub();
+                    Post(R"({"type":"showUpdates"})");
+                    break;
+                case WM_CONTEXTMENU:
+                    ShowTrayMenu();
+                    break;
+            }
+            return 0;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == kMenuOpen) ShowHub();
+            if (LOWORD(wParam) == kMenuCheck) Post(R"({"type":"checkUpdates"})");
+            if (LOWORD(wParam) == kMenuQuit) Quit();
+            return 0;
         case WM_SIZE:
             ResizeWebView();
             return 0;
@@ -128,15 +238,22 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(window_);
             return 0;
         case WM_CLOSE:
-            // Quitting would cut an installer off halfway.
-            if (runningOperations_ > 0 &&
-                MessageBoxW(window_, L"An app is still being installed or removed. Close Vitool Box anyway?", L"Vitool Box",
-                            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+            if (keepInTray_) {
+                ShowWindow(window_, SW_HIDE);
+                if (controller_) controller_->put_IsVisible(FALSE);
                 return 0;
             }
-            DestroyWindow(window_);
+            Quit();
+            return 0;
+        case WM_QUERYENDSESSION:
+            return TRUE;
+        case WM_ENDSESSION:
+            // Windows is shutting down, or an installer asked Vitool Box to
+            // close (Restart Manager): quit even when kept in the tray.
+            if (wParam) DestroyWindow(window_);
             return 0;
         case WM_DESTROY:
+            SetTrayVisible(false);
             if (controller_) controller_->Close();
             PostQuitMessage(0);
             return 0;
@@ -224,6 +341,8 @@ void HubWindow::CreateWebView() {
                                     }).Get(),
                                 nullptr);
 
+                            // A hidden page lets the UI know it runs in the background.
+                            controller_->put_IsVisible(IsWindowVisible(window_));
                             ResizeWebView();
                             webView_->Navigate(kStartPage);
                             return S_OK;
@@ -249,7 +368,22 @@ void HubWindow::OnWebMessage(const std::string& json) {
     const auto appId = Field(*message, "appId");
 
     if (type == "hello") {
-        Post(R"({"type":"hello","version":)" + JsonQuote(VITOOL_VERSION_STRING) + "}");
+        Post(R"({"type":"hello","version":)" + JsonQuote(VITOOL_VERSION_STRING) + R"(,"startup":)" + JsonQuote(keepInTray_ ? "1" : "0") +
+             R"(,"hidden":)" + JsonQuote(startedHidden_ ? "1" : "0") + "}");
+    } else if (type == "strings") {
+        for (const char* key : {"closeBusy", "trayOpen", "trayCheck", "trayQuit", "trayTip"}) strings_[key] = Utf8ToWide(Field(*message, key));
+        UpdateTrayIcon();
+    } else if (type == "startup") {
+        const bool enabled = Field(*message, "enabled") == "1";
+        if (SetStartWithWindows(enabled)) keepInTray_ = enabled;
+        SetTrayVisible(keepInTray_);
+        Post(R"({"type":"startup","enabled":)" + JsonQuote(keepInTray_ ? "1" : "0") + "}");
+    } else if (type == "updates") {
+        updateCount_ = std::atoi(Field(*message, "count").c_str());
+        strings_["trayTip"] = Utf8ToWide(Field(*message, "tip"));
+        UpdateTrayIcon();
+    } else if (type == "notify") {
+        Notify(Utf8ToWide(Field(*message, "title")), Utf8ToWide(Field(*message, "text")));
     } else if (type == "state") {
         // "ids" is a comma-separated list of AppIds.
         std::string apps;
@@ -266,10 +400,10 @@ void HubWindow::OnWebMessage(const std::string& json) {
             start = end + 1;
         }
         Post(R"({"type":"state","apps":{)" + apps + "}}");
-    } else if (type == "install") {
-        StartOperation(appId, true, Utf8ToWide(Field(*message, "url")), Field(*message, "sha256"), Utf8ToWide(Field(*message, "fileName")));
-    } else if (type == "uninstall") {
-        StartOperation(appId, false, {}, {}, {});
+    } else if (type == "install" || type == "uninstall") {
+        StartOperation(*message, type == "install");
+    } else if (type == "cancel") {
+        if (const auto it = cancels_.find(appId); it != cancels_.end()) *it->second = true;
     } else if (type == "selfUpdate") {
         StartSelfUpdateOperation(Utf8ToWide(Field(*message, "url")), Field(*message, "sha256"), Utf8ToWide(Field(*message, "fileName")));
     } else if (type == "launch") {
@@ -279,34 +413,72 @@ void HubWindow::OnWebMessage(const std::string& json) {
             const auto program = installed->location / exe;
             ShellExecuteW(window_, L"open", program.c_str(), nullptr, installed->location.c_str(), SW_SHOWNORMAL);
         }
+    } else if (type == "openFolder") {
+        const auto installed = FindInstalled(Utf8ToWide(appId));
+        std::error_code ignored;
+        if (installed && std::filesystem::is_directory(installed->location, ignored)) {
+            ShellExecuteW(window_, L"open", installed->location.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+    } else if (type == "backup" || type == "restore") {
+        StartBackup(Field(*message, "spec"), type == "restore");
     } else if (type == "openUrl") {
         OpenInBrowser(Utf8ToWide(Field(*message, "url")));
     }
 }
 
-void HubWindow::StartOperation(const std::string& appId, bool install, std::wstring url, std::string sha256, std::wstring fileName) {
+void HubWindow::StartOperation(const JsonObject& message, bool install) {
+    const auto appId = Field(message, "appId");
+    const auto url = Utf8ToWide(Field(message, "url"));
+    const auto sha256 = Field(message, "sha256");
+    const auto fileName = Utf8ToWide(Field(message, "fileName"));
+    const auto exe = Utf8ToWide(Field(message, "exe"));
+    const bool closeApp = Field(message, "closeApp") == "1";
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    cancels_[appId] = cancel;
     ++runningOperations_;
     HWND window = window_;
     std::thread([=] {
-        auto post = [window](std::string json) {
-            auto* heap = new std::string(std::move(json));
-            if (!PostMessageW(window, WM_APP_POST, 0, reinterpret_cast<LPARAM>(heap))) delete heap;
-        };
+        const auto post = PosterFor(window);
         const auto id = Utf8ToWide(appId);
+        const std::string action = install ? "install" : "uninstall";
         std::wstring error;
-        if (install) {
+
+        // An installer can't replace the files of a program that is open.
+        bool reopen = false;
+        if (const auto installed = FindInstalled(id); installed && IsRunningFrom(installed->location)) {
+            if (!closeApp) {
+                post(R"({"type":"running","appId":)" + JsonQuote(appId) + R"(,"action":)" + JsonQuote(action) + "}");
+                PostMessageW(window, WM_APP_OPERATION_DONE, 0, 0);
+                return;
+            }
+            if (!CloseProgramsIn(installed->location)) error = L"closeFailed";
+            reopen = install;
+        }
+
+        if (error.empty() && install) {
             int lastPercent = -1;
             error = InstallApp(id, url, sha256, fileName, [&](uint64_t received, uint64_t total) {
                 const int percent = total ? static_cast<int>(received * 100 / total) : -1;
-                if (percent == lastPercent) return;
-                lastPercent = percent;
-                post(R"({"type":"progress","appId":)" + JsonQuote(appId) + R"(,"percent":")" + std::to_string(percent) + "\"}");
+                if (percent != lastPercent) {
+                    lastPercent = percent;
+                    post(R"({"type":"progress","appId":)" + JsonQuote(appId) + R"(,"percent":")" + std::to_string(percent) + "\"}");
+                }
+                return !*cancel;
             });
-        } else {
+        } else if (error.empty()) {
             error = UninstallApp(id);
         }
-        post(R"({"type":"done","appId":)" + JsonQuote(appId) + R"(,"action":)" + JsonQuote(install ? "install" : "uninstall") +
-             R"(,"error":)" + JsonQuote(WideToUtf8(error)) + "}");
+
+        if (error.empty() && reopen && IsSafeFileName(exe)) {
+            // Some installers start their app again by themselves.
+            Sleep(1500);
+            if (const auto installed = FindInstalled(id); installed && !IsRunningFrom(installed->location)) {
+                const auto program = installed->location / exe;
+                ShellExecuteW(nullptr, L"open", program.c_str(), nullptr, installed->location.c_str(), SW_SHOWNORMAL);
+            }
+        }
+        post(R"({"type":"done","appId":)" + JsonQuote(appId) + R"(,"action":)" + JsonQuote(action) + R"(,"error":)" +
+             JsonQuote(WideToUtf8(error)) + "}");
         PostMessageW(window, WM_APP_OPERATION_DONE, 0, 0);
     }).detach();
 }
@@ -314,20 +486,19 @@ void HubWindow::StartOperation(const std::string& appId, bool install, std::wstr
 void HubWindow::StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName) {
     HWND window = window_;
     std::thread([=] {
-        auto post = [window](std::string json) {
-            auto* heap = new std::string(std::move(json));
-            if (!PostMessageW(window, WM_APP_POST, 0, reinterpret_cast<LPARAM>(heap))) delete heap;
-        };
+        const auto post = PosterFor(window);
         std::wstring error;
         if (!StartsWith(url, kSelfUpdatePrefix)) {
-            error = L"This update is not a Vitool Box release.";
+            error = L"notHubRelease";
         } else {
             int lastPercent = -1;
             error = StartSelfUpdate(url, sha256, fileName, [&](uint64_t received, uint64_t total) {
                 const int percent = total ? static_cast<int>(received * 100 / total) : -1;
-                if (percent == lastPercent) return;
-                lastPercent = percent;
-                post(R"({"type":"progress","appId":"hub","percent":")" + std::to_string(percent) + "\"}");
+                if (percent != lastPercent) {
+                    lastPercent = percent;
+                    post(R"({"type":"progress","appId":"hub","percent":")" + std::to_string(percent) + "\"}");
+                }
+                return true;
             });
         }
         if (error.empty()) {
@@ -336,6 +507,131 @@ void HubWindow::StartSelfUpdateOperation(std::wstring url, std::string sha256, s
             post(R"({"type":"done","appId":"hub","action":"selfUpdate","error":)" + JsonQuote(WideToUtf8(error)) + "}");
         }
     }).detach();
+}
+
+void HubWindow::StartBackup(const std::string& spec, bool restore) {
+    const std::string type = restore ? "restoreDone" : "backupDone";
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    wchar_t name[64];
+    swprintf_s(name, L"Vitool Box settings %04u-%02u-%02u.zip", now.wYear, now.wMonth, now.wDay);
+    const auto zip = PickZip(window_, !restore, name);
+    if (zip.empty()) {
+        Post(R"({"type":)" + JsonQuote(type) + R"(,"error":"","apps":"","cancelled":"1"})");
+        return;
+    }
+    ++runningOperations_;
+    HWND window = window_;
+    std::thread([=] {
+        const auto apps = ParseBackupSpec(Utf8ToWide(spec));
+        std::vector<std::wstring> done;
+        std::wstring error;
+        if (!restore) {
+            error = BackupSettings(apps, zip, done);
+        } else {
+            // An open app would write its old settings back when it quits:
+            // close it first and start it again afterwards.
+            bool reopen = false;
+            error = RestoreSettings(zip, apps,
+                [&](const BackupApp& app) {
+                    const auto installed = FindInstalled(app.appId);
+                    reopen = installed && IsRunningFrom(installed->location) && CloseProgramsIn(installed->location);
+                },
+                [&](const BackupApp& app) {
+                    const auto installed = FindInstalled(app.appId);
+                    if (!reopen || !installed || app.exe.empty()) return;
+                    const auto program = installed->location / app.exe;
+                    ShellExecuteW(nullptr, L"open", program.c_str(), nullptr, installed->location.c_str(), SW_SHOWNORMAL);
+                },
+                done);
+        }
+        PosterFor(window)(R"({"type":)" + JsonQuote(type) + R"(,"error":)" + JsonQuote(WideToUtf8(error)) + R"(,"apps":)" + JsonQuote(JoinUtf8(done)) + "}");
+        PostMessageW(window, WM_APP_OPERATION_DONE, 0, 0);
+    }).detach();
+}
+
+void HubWindow::ShowHub() {
+    ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOW);
+    if (controller_) controller_->put_IsVisible(TRUE);
+    SetForegroundWindow(window_);
+}
+
+void HubWindow::Quit() {
+    // Quitting would cut an installer off halfway.
+    if (runningOperations_ > 0) {
+        const auto text = strings_["closeBusy"].empty() ? std::wstring(L"An app is still being installed or removed. Close Vitool Box anyway?")
+                                                        : strings_["closeBusy"];
+        if (MessageBoxW(window_, text.c_str(), L"Vitool Box", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+    }
+    DestroyWindow(window_);
+}
+
+void HubWindow::SetTrayVisible(bool visible) {
+    NOTIFYICONDATAW data{sizeof(data)};
+    data.hWnd = window_;
+    data.uID = kTrayId;
+    if (!visible) {
+        if (trayVisible_) Shell_NotifyIconW(NIM_DELETE, &data);
+        trayVisible_ = false;
+        return;
+    }
+    if (trayVisible_) return;
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    data.uCallbackMessage = WM_APP_TRAY;
+    data.hIcon = icon_;
+    wcscpy_s(data.szTip, L"Vitool Box");
+    if (Shell_NotifyIconW(NIM_ADD, &data)) {
+        data.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &data);
+        trayVisible_ = true;
+        UpdateTrayIcon();
+    }
+}
+
+void HubWindow::UpdateTrayIcon() {
+    if (!trayVisible_) return;
+    NOTIFYICONDATAW data{sizeof(data)};
+    data.hWnd = window_;
+    data.uID = kTrayId;
+    data.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    data.hIcon = updateCount_ > 0 && badgeIcon_ ? badgeIcon_ : icon_;
+    const auto& tip = strings_["trayTip"];
+    wcsncpy_s(data.szTip, tip.empty() ? L"Vitool Box" : tip.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &data);
+}
+
+void HubWindow::ShowTrayMenu() {
+    auto text = [this](const char* key, const wchar_t* fallback) {
+        const auto& value = strings_[key];
+        return value.empty() ? std::wstring(fallback) : value;
+    };
+    const auto open = text("trayOpen", L"Open Vitool Box");
+    const auto check = text("trayCheck", L"Check for updates");
+    const auto quit = text("trayQuit", L"Quit");
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, kMenuOpen, open.c_str());
+    AppendMenuW(menu, MF_STRING, kMenuCheck, check.c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuQuit, quit.c_str());
+    SetMenuDefaultItem(menu, kMenuOpen, FALSE);
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    SetForegroundWindow(window_);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, cursor.x, cursor.y, 0, window_, nullptr);
+    DestroyMenu(menu);
+}
+
+void HubWindow::Notify(const std::wstring& title, const std::wstring& text) {
+    if (!trayVisible_) return;
+    NOTIFYICONDATAW data{sizeof(data)};
+    data.hWnd = window_;
+    data.uID = kTrayId;
+    data.uFlags = NIF_INFO;
+    data.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
+    data.hBalloonIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP));
+    wcsncpy_s(data.szInfoTitle, title.c_str(), _TRUNCATE);
+    wcsncpy_s(data.szInfo, text.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
 }  // namespace vitool

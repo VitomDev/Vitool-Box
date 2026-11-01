@@ -29,7 +29,7 @@ std::filesystem::path UninstallerFromCommand(std::wstring_view command);
 
 std::optional<InstalledApp> FindInstalled(std::wstring_view appId);
 
-// Each returns an empty string on success, otherwise a message for the user.
+// Each returns an empty string on success, otherwise an error key for the UI.
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
                         const DownloadProgress& progress);
 std::wstring UninstallApp(std::wstring_view appId);
