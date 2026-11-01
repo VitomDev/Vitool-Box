@@ -109,7 +109,7 @@ It downloads the pinned dependencies into `.deps/` (Windows SDK, WebView2 SDK, C
 ## 🏗️ How it works
 
 - `VitoolBox.exe` (C++) hosts a WebView2 window with the UI in `src/ui` (HTML, CSS, JavaScript)
-- The UI finds the apps through the GitHub API and caches the catalog for a few hours
+- The UI finds the apps through the GitHub API each time it opens, and keeps the last list for when GitHub can't be reached
 - The C++ side downloads installers, checks their SHA-256 (from the release asset's `digest`), runs them silently and reads the installed apps from Windows' list of programs
 
 ---

@@ -7,7 +7,6 @@ const OWNER = 'VitomDev';
 const TOPIC = 'vitool-box';
 const HUB_REPO = 'Vitool-Box';
 const CACHE_KEY = 'vitool.catalog.v1';
-const CACHE_HOURS = 3;
 const SETTINGS_KEY = 'vitool.settings.v1';
 const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
@@ -183,7 +182,7 @@ function readCache() {
 
 function writeCache(catalog) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ ...catalog, time: catalog.time || Date.now() }));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ...catalog, time: Date.now() }));
   } catch { /* Storage unavailable: the catalog is fetched again next time. */ }
 }
 
@@ -209,21 +208,10 @@ function applyCatalog(catalog) {
   renderBanner();
 }
 
-async function loadCatalog(force) {
+// Fetched on every start so new releases show up right away; the cached list
+// is shown meanwhile and kept when GitHub can't be reached.
+async function loadCatalog() {
   const cached = readCache();
-  if (cached && !force && Date.now() - cached.time < CACHE_HOURS * 3600 * 1000) {
-    applyCatalog(cached);
-    // The hub's own update is always checked: it's a single request.
-    const hubLatest = await fetchHubRelease();
-    if (hubLatest) {
-      state.hubLatest = hubLatest;
-      writeCache({ apps: cached.apps, hubLatest, time: cached.time });
-      renderBanner();
-    }
-    state.catalogReady = true;
-    maybeAutoUpdate();
-    return;
-  }
   if (cached) applyCatalog(cached);
 
   $('refresh').classList.add('spinning');
@@ -656,7 +644,7 @@ state.settings = readSettings();
 $('back').addEventListener('click', showHome);
 $('open-settings').addEventListener('click', () => setView('settings'));
 $('update-all').addEventListener('click', updateAll);
-$('refresh').addEventListener('click', () => loadCatalog(true));
+$('refresh').addEventListener('click', () => loadCatalog());
 $('search').addEventListener('input', (event) => { state.query = event.target.value; renderGrid(); });
 $('lightbox').addEventListener('click', () => { $('lightbox').hidden = true; });
 document.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
@@ -674,4 +662,4 @@ document.addEventListener('keydown', (event) => {
 window.addEventListener('focus', () => { if (state.apps.length) refreshInstalled(); });
 
 send({ type: 'hello' });
-loadCatalog(false);
+loadCatalog();
