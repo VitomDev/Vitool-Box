@@ -39,6 +39,7 @@ UninstallDisplayName={#AppName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+LicenseFile=..\LICENSE
 CloseApplications=yes
 
 [Files]
