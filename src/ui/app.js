@@ -57,7 +57,7 @@ function send(message) {
 }
 
 if (host) {
-  host.addEventListener('message', (event) => {
+  host.addEventListener('message', async (event) => {
     const message = event.data;
     switch (message.type) {
       case 'hello':
@@ -91,6 +91,7 @@ if (host) {
       }
       case 'done':
         delete state.busy[message.appId];
+        if (message.error === 'checksum' && message.appId !== 'hub' && await retriedWithNewCatalog(message.appId)) break;
         if (message.error && message.error !== 'cancelled') state.errors[message.appId] = message.error;
         if (message.appId === 'hub') renderBanner();
         refreshInstalled();
@@ -271,7 +272,8 @@ async function fetchFromApi() {
 
 // The published catalog.json, with every release and README included.
 async function fetchPublished() {
-  const response = await fetch(CATALOG_URL, { cache: 'no-cache' });
+  // Raw files are cached for minutes by GitHub's CDN: a unique URL skips that.
+  const response = await fetch(`${CATALOG_URL}?t=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const catalog = await response.json();
   if (catalog.version !== 1 || !Array.isArray(catalog.apps)) throw new Error('catalog');
@@ -467,6 +469,20 @@ function uninstall(app, options = {}) {
   };
   if (options.closeApp) run();
   else confirmDialog(t('uninstallTitle', { name: app.name }), t('uninstallText'), t('uninstall'), run, true);
+}
+
+// A release asset replaced after the catalog was read fails its checksum:
+// read the catalog again and, if the checksum changed, install once more.
+async function retriedWithNewCatalog(appId) {
+  const last = state.lastAction[appId];
+  if (!last || last.action !== 'install' || last.release || last.retried) return false;
+  const before = appById(appId);
+  await loadCatalog();
+  const app = appById(appId);
+  if (!app || !app.asset || !before || !before.asset || app.asset.sha256 === before.asset.sha256) return false;
+  install(app, { confirmed: true });
+  state.lastAction[appId].retried = true;
+  return true;
 }
 
 function retry(app) {
