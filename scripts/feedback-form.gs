@@ -77,6 +77,41 @@ function replaceEmailFields() {
   });
 }
 
+// Web app read by Vitool Box Hub (deployed as "Execute as me", "Anyone"); answers only with the key
+function doGet(e) {
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('apiKey');
+  if (!key || !e || e.parameter.key !== key) return asJson({ error: 'forbidden' });
+
+  const form = FormApp.openById(props.getProperty('formId'));
+  const responses = form.getResponses().map((response) => {
+    const answers = {};
+    response.getItemResponses().forEach((answer) => {
+      const item = answer.getItem();
+      let value = answer.getResponse();
+      if (item.getType() === FormApp.ItemType.FILE_UPLOAD) {
+        value = value.map((id) => 'https://drive.google.com/file/d/' + id + '/view');
+      }
+      answers[item.getTitle()] = value;
+    });
+    return { id: response.getId(), time: response.getTimestamp().toISOString(), email: response.getRespondentEmail(), answers };
+  });
+  return asJson({ responses });
+}
+
+function asJson(data) {
+  return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// Run once: creates the key for Vitool Box Hub and turns on verified emails (sign-in is required anyway)
+function createApiKey() {
+  const key = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('apiKey', key);
+  FormApp.openById(props.getProperty('formId')).setCollectEmail(true);
+  Logger.log('Key: ' + key);
+}
+
 function syncApps() {
   const props = PropertiesService.getScriptProperties();
   const form = FormApp.openById(props.getProperty('formId'));
