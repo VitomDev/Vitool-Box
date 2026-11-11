@@ -23,7 +23,8 @@ function setup() {
     .setHelpText('What did you do right before it happened? (optional)');
   form.addTextItem().setTitle('App version').setHelpText('You can see it in Vitool Box or in the app settings. (optional)');
   form.addTextItem().setTitle('Windows version').setHelpText('For example: Windows 11 24H2. (optional)');
-  form.addTextItem().setTitle('Screenshot link').setHelpText('A link to an image or video of the problem. (optional)');
+  // FormApp can't create file uploads: "Screenshot or video" (images and videos, 5 files of 1 GB,
+  // 10 GB in total) was added by hand in the editor and makes respondents sign in.
   addEmail(form);
 
   const idea = form.addPageBreakItem().setTitle('Suggestion')
@@ -58,10 +59,22 @@ function info() {
   Logger.log('Sheet: ' + SpreadsheetApp.openById(form.getDestinationId()).getUrl());
 }
 
+// The file upload makes respondents sign in, so their email arrives anyway; just ask if they want a reply
 function addEmail(form) {
-  form.addTextItem().setTitle('Your email')
-    .setHelpText('Only if you want a reply. (optional)')
-    .setValidation(FormApp.createTextValidation().requireTextIsEmail().build());
+  return form.addCheckboxItem().setTitle('Would you like a reply?')
+    .setHelpText("We'll answer at the email of your Google account.")
+    .setChoiceValues(['Yes, reply to my email']);
+}
+
+// One-off migration from the old "Your email" text fields
+function replaceEmailFields() {
+  const form = FormApp.openById(PropertiesService.getScriptProperties().getProperty('formId'));
+  form.getItems(FormApp.ItemType.CHECKBOX).forEach((i) => form.deleteItem(i));
+  form.getItems(FormApp.ItemType.TEXT).filter((i) => i.getTitle() === 'Your email').forEach((old) => {
+    const index = old.getIndex();
+    form.moveItem(addEmail(form).getIndex(), index);
+    form.deleteItem(index + 1);
+  });
 }
 
 function syncApps() {
