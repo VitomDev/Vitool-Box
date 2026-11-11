@@ -74,7 +74,6 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .credits { display: flex; justify-content: space-between; gap: 16px; flex: none; padding: 6px 24px 8px; font-size: 12px; border-top: 1px solid var(--border); }
 .credits a { color: var(--text-muted); text-decoration: none; }
 .credits a:hover { color: var(--accent); }
-.credits a.copied { color: var(--success); }
 
 .search {
   width: min(320px, 40vw);
@@ -263,6 +262,7 @@ main { flex: 1; overflow-y: auto; padding: 20px 24px 32px; }
 .detail-head .info { flex: 1; min-width: 0; }
 .detail-head h1 { margin: 0; font-size: 26px; font-weight: 600; line-height: 1.2; }
 .detail-head .tagline { margin: 4px 0 10px; color: var(--text-muted); }
+.detail-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-muted); font-size: 13px; }
 
 .actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 170px; }

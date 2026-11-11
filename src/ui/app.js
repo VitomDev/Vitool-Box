@@ -16,7 +16,9 @@ const RAW = 'https://raw.githubusercontent.com';
 const CATALOG_URL = `${RAW}/${OWNER}/${HUB_REPO}/main/catalog.json`;
 const STALE_DAYS = 3;
 const ETAG_KEY = 'vitool.etags.v1';
-const CONTACT_MAIL = 'contactvitom@gmail.com';
+// Google Form for bugs and suggestions; its app list follows catalog.json (scripts/feedback-form.gs)
+const FEEDBACK_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSd1r9NeMrnkdrf2E5-5THib7mwy1yq975HT-CuIhGInnpYSYw/viewform';
+const FEEDBACK_APP_FIELD = 'entry.2001919890';
 const NEW_DAYS = 7;
 const CHECK_HOURS = 4;
 
@@ -901,7 +903,9 @@ function renderDetail() {
   detail.replaceChildren(...[
     el('div', { class: 'detail-head' }, appIcon(app, true),
       el('div', { class: 'info' }, el('h1', {}, app.name), el('p', { class: 'tagline' }, app.tagline), meta,
-        el('p', {}, el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); send({ type: 'openUrl', url: app.homepage }); } }, t('viewOnGitHub')))),
+        el('p', { class: 'detail-links' },
+          el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); send({ type: 'openUrl', url: app.homepage }); } }, t('viewOnGitHub')),
+          el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); openFeedback(app.name); } }, t('reportProblem')))),
       detailActions(app)),
     app.screenshots.length ? el('div', { class: 'screenshots' }, app.screenshots.map((src) => {
       const image = el('img', { src, alt: t('screenshot', { name: app.name }), loading: 'lazy', onclick: () => openLightbox(src) });
@@ -1017,7 +1021,14 @@ function renderSettings() {
     el('h2', { class: 'section-title' }, t('about')),
     el('div', { class: 'setting' },
       el('div', {}, el('strong', {}, `Vitool Box ${state.hubVersion || ''}`), el('span', {}, t('aboutText'))),
-      el('button', { class: 'button', onclick: () => send({ type: 'openUrl', url: `https://github.com/${OWNER}/${HUB_REPO}` }) }, t('viewOnGitHub'))));
+      el('div', { class: 'setting-buttons' },
+        el('button', { class: 'button', onclick: () => openFeedback('Vitool Box') }, t('reportProblem')),
+        el('button', { class: 'button', onclick: () => send({ type: 'openUrl', url: `https://github.com/${OWNER}/${HUB_REPO}` }) }, t('viewOnGitHub')))));
+}
+
+function openFeedback(appName) {
+  const url = appName ? `${FEEDBACK_URL}?usp=pp_url&${FEEDBACK_APP_FIELD}=${encodeURIComponent(appName)}` : FEEDBACK_URL;
+  send({ type: 'openUrl', url });
 }
 
 function startBackup() {
@@ -1081,7 +1092,7 @@ function openLightbox(src) {
 function applyLanguage() {
   setLanguage(state.settings.language);
   $('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
-  $('contact').textContent = t('contact', { mail: CONTACT_MAIL });
+  $('contact').textContent = t('contact');
   renderCategories();
   render();
   sendHostStrings();
@@ -1093,23 +1104,8 @@ state.settings = readSettings();
 setLanguage(state.settings.language);
 $('sort').value = state.settings.sort;
 $('credits').textContent = `${t('credits')} · github.com/${OWNER}`;
-$('contact').textContent = t('contact', { mail: CONTACT_MAIL });
-$('contact').addEventListener('click', async (event) => {
-  event.preventDefault();
-  try {
-    await navigator.clipboard.writeText(CONTACT_MAIL);
-  } catch {
-    return;
-  }
-  const link = $('contact');
-  link.textContent = t('mailCopied');
-  link.classList.add('copied');
-  clearTimeout(link.copiedTimer);
-  link.copiedTimer = setTimeout(() => {
-    link.textContent = t('contact', { mail: CONTACT_MAIL });
-    link.classList.remove('copied');
-  }, 1600);
-});
+$('contact').textContent = t('contact');
+$('contact').addEventListener('click', (event) => { event.preventDefault(); openFeedback(); });
 $('credits').addEventListener('click', (event) => { event.preventDefault(); send({ type: 'openUrl', url: `https://github.com/${OWNER}` }); });
 $('back').addEventListener('click', showHome);
 $('open-settings').addEventListener('click', () => setView('settings'));
