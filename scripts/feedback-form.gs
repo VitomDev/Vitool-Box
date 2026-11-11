@@ -108,7 +108,7 @@ function createApiKey() {
   const key = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
   const props = PropertiesService.getScriptProperties();
   props.setProperty('apiKey', key);
-  FormApp.openById(props.getProperty('formId')).setCollectEmail(true);
+  FormApp.openById(props.getProperty('formId')).setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED);
   Logger.log('Key: ' + key);
 }
 
