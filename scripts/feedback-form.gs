@@ -99,6 +99,29 @@ function doGet(e) {
   return asJson({ responses });
 }
 
+// Replies sent from Vitool Box Hub. Only to the email of an existing response, so the key can't mail anyone else
+function doPost(e) {
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('apiKey');
+  let data;
+  try { data = JSON.parse(e.postData.contents); } catch (error) { return asJson({ error: 'bad request' }); }
+  if (!key || data.key !== key) return asJson({ error: 'forbidden' });
+
+  const form = FormApp.openById(props.getProperty('formId'));
+  let response;
+  try { response = form.getResponse(data.id); } catch (error) { return asJson({ error: 'unknown report' }); }
+  const to = response.getRespondentEmail();
+  if (!to || !data.subject || !data.body) return asJson({ error: 'missing fields' });
+
+  MailApp.sendEmail({ to, subject: String(data.subject).slice(0, 200), body: String(data.body), name: 'VitomDev' });
+  return asJson({ ok: true, to, quota: MailApp.getRemainingDailyQuota() });
+}
+
+// Run once from the editor so Google asks for the "send email" permission
+function authorizeMail() {
+  Logger.log('Emails left today: ' + MailApp.getRemainingDailyQuota());
+}
+
 function asJson(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
 }
