@@ -17,6 +17,7 @@ Browse the apps, read what each one does, and turn on the ones you want: Vitool 
 - ☑️ **Install several at once**: pick them and they install one after another
 - ⬆️ **Updates**: update with one click right from the app list, or all at once
 - 🔔 **Update notifications**: starts with Windows, waits in the notification area and lets you know when there are updates
+- 🗃️ **Group your apps' icons** (optional, off by default): one Vitool Box icon next to the clock instead of one per app; click an app to use it, right-click for its menu
 - 🕰️ **Version history**: read the notes of every release and go back to an older version if a new one gives you trouble
 - 🔄 **Updates itself**: Vitool Box downloads its new version and restarts into it
 - 🤖 **Optional auto-update**: install your apps' updates every time you open Vitool Box

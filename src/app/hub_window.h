@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 
+#include "app/tray_group.h"
 #include "app/update_window.h"
 #include "core/json.h"
 
@@ -50,15 +51,19 @@ private:
     void SetTrayVisible(bool visible);
     void UpdateTrayIcon();
     void ShowTrayMenu();
-    void Notify(const std::wstring& title, const std::wstring& text);
+    void Notify(const std::wstring& title, const std::wstring& text, DWORD flags = NIIF_USER | NIIF_LARGE_ICON, HICON icon = nullptr);
+    void SetGroupIcons(bool enabled);
+    void OnTrayClick();
 
     HWND window_ = nullptr;
     HANDLE instanceMutex_ = nullptr;
     UpdateWindow updateWindow_;
+    TrayGroup trayGroup_;
     HINSTANCE instance_ = nullptr;
     bool darkMode_ = false;
     bool startedHidden_ = false;
     bool keepInTray_ = false;   // "Start with Windows": closing hides the window
+    bool groupIcons_ = false;   // también se queda en segundo plano
     bool trayVisible_ = false;
     int updateCount_ = 0;
     int runningOperations_ = 0;

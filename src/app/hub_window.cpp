@@ -161,6 +161,11 @@ bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex) {
     instance_ = instance;
     startedHidden_ = hidden;
     keepInTray_ = StartsWithWindows();
+    groupIcons_ = GroupsTrayIcons();
+    trayGroup_.onBalloon = [this](const std::wstring& title, const std::wstring& text, DWORD flags, HICON icon) {
+        Notify(title, text, flags, icon);
+    };
+    trayGroup_.onOpenHub = [this] { ShowHub(); };
     taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
     icon_ = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                           GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
@@ -192,7 +197,8 @@ bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex) {
     const BOOL dark = darkMode_;
     DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     if (!hidden) ShowWindow(window_, SW_SHOWNORMAL);
-    SetTrayVisible(keepInTray_);
+    SetTrayVisible(keepInTray_ || groupIcons_);
+    if (groupIcons_) trayGroup_.Start(instance, darkMode_);
     CreateWebView();
     return true;
 }
@@ -222,9 +228,14 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             switch (LOWORD(lParam)) {
                 case NIN_SELECT:
                 case NIN_KEYSELECT:
-                    ShowHub();
+                    OnTrayClick();
+                    break;
+                case NIN_BALLOONTIMEOUT:
+                case NIN_BALLOONHIDE:
+                    trayGroup_.ForwardBalloon(LOWORD(lParam));
                     break;
                 case NIN_BALLOONUSERCLICK:
+                    if (trayGroup_.ForwardBalloon(NIN_BALLOONUSERCLICK)) break;
                     ShowHub();
                     Post(R"({"type":"showUpdates"})");
                     break;
@@ -258,6 +269,7 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 darkMode_ = SystemUsesDarkMode();
                 const BOOL dark = darkMode_;
                 DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+                trayGroup_.SetDarkMode(darkMode_);
             }
             return 0;
         case WM_APP_POST: {
@@ -283,7 +295,7 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             FinishSelfUpdate(wParam != 0);
             return 0;
         case WM_CLOSE:
-            if (keepInTray_) {
+            if (keepInTray_ || groupIcons_) {
                 ShowWindow(window_, SW_HIDE);
                 if (controller_) controller_->put_IsVisible(FALSE);
                 return 0;
@@ -298,6 +310,7 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (wParam) DestroyWindow(window_);
             return 0;
         case WM_DESTROY:
+            trayGroup_.Stop();
             SetTrayVisible(false);
             if (controller_) controller_->Close();
             if (instanceMutex_) CloseHandle(instanceMutex_);
@@ -415,20 +428,24 @@ void HubWindow::OnWebMessage(const std::string& json) {
 
     if (type == "hello") {
         Post(R"({"type":"hello","version":)" + JsonQuote(VITOOL_VERSION_STRING) + R"(,"startup":)" + JsonQuote(keepInTray_ ? "1" : "0") +
-             R"(,"hidden":)" + JsonQuote(startedHidden_ ? "1" : "0") + "}");
+             R"(,"hidden":)" + JsonQuote(startedHidden_ ? "1" : "0") + R"(,"group":)" + JsonQuote(groupIcons_ ? "1" : "0") + "}");
     } else if (type == "strings") {
-        for (const char* key : {"closeBusy", "trayOpen", "trayCheck", "trayQuit", "trayTip"}) strings_[key] = Utf8ToWide(Field(*message, key));
+        for (const char* key : {"closeBusy", "trayOpen", "trayCheck", "trayQuit", "trayTip", "groupHint"}) strings_[key] = Utf8ToWide(Field(*message, key));
+        trayGroup_.SetTexts(strings_["trayOpen"], strings_["groupHint"]);
         UpdateTrayIcon();
     } else if (type == "startup") {
         const bool enabled = Field(*message, "enabled") == "1";
         if (SetStartWithWindows(enabled)) keepInTray_ = enabled;
-        SetTrayVisible(keepInTray_);
+        SetTrayVisible(keepInTray_ || groupIcons_);
         Post(R"({"type":"startup","enabled":)" + JsonQuote(keepInTray_ ? "1" : "0") + "}");
+    } else if (type == "group") {
+        SetGroupIcons(Field(*message, "enabled") == "1");
     } else if (type == "updates") {
         updateCount_ = std::atoi(Field(*message, "count").c_str());
         strings_["trayTip"] = Utf8ToWide(Field(*message, "tip"));
         UpdateTrayIcon();
     } else if (type == "notify") {
+        trayGroup_.ClearBalloon();
         Notify(Utf8ToWide(Field(*message, "title")), Utf8ToWide(Field(*message, "text")));
     } else if (type == "state") {
         // "ids" is a comma-separated list of AppIds.
@@ -573,6 +590,7 @@ void HubWindow::InstallSelfUpdate(const std::filesystem::path& setup) {
         CloseHandle(instanceMutex_);
         instanceMutex_ = nullptr;
     }
+    trayGroup_.Stop();
     SetTrayVisible(false);
     MoveFileExW(OwnExecutable().c_str(), MovedExecutable().c_str(), MOVEFILE_REPLACE_EXISTING);
     HWND window = window_;
@@ -685,6 +703,32 @@ void HubWindow::SetTrayVisible(bool visible) {
     }
 }
 
+void HubWindow::SetGroupIcons(bool enabled) {
+    if (SetGroupTrayIcons(enabled)) groupIcons_ = enabled;
+    SetTrayVisible(keepInTray_ || groupIcons_);
+    if (groupIcons_) trayGroup_.Start(instance_, darkMode_);
+    else trayGroup_.Stop();
+    Post(R"({"type":"group","enabled":)" + JsonQuote(groupIcons_ ? "1" : "0") + "}");
+}
+
+// Con los iconos agrupados, pinchar el de Vitool Box abre el panel con las apps.
+void HubWindow::OnTrayClick() {
+    if (!groupIcons_ || trayGroup_.Empty()) {
+        ShowHub();
+        return;
+    }
+    NOTIFYICONIDENTIFIER icon{sizeof(icon)};
+    icon.hWnd = window_;
+    icon.uID = kTrayId;
+    RECT anchor{};
+    if (FAILED(Shell_NotifyIconGetRect(&icon, &anchor))) {
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        anchor = {cursor.x, cursor.y, cursor.x, cursor.y};
+    }
+    trayGroup_.ShowPanel(anchor);
+}
+
 void HubWindow::UpdateTrayIcon() {
     if (!trayVisible_) return;
     NOTIFYICONDATAW data{sizeof(data)};
@@ -718,14 +762,14 @@ void HubWindow::ShowTrayMenu() {
     DestroyMenu(menu);
 }
 
-void HubWindow::Notify(const std::wstring& title, const std::wstring& text) {
+void HubWindow::Notify(const std::wstring& title, const std::wstring& text, DWORD flags, HICON icon) {
     if (!trayVisible_) return;
     NOTIFYICONDATAW data{sizeof(data)};
     data.hWnd = window_;
     data.uID = kTrayId;
     data.uFlags = NIF_INFO;
-    data.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
-    data.hBalloonIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP));
+    data.dwInfoFlags = flags;
+    data.hBalloonIcon = icon ? icon : LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP));
     wcsncpy_s(data.szInfoTitle, title.c_str(), _TRUNCATE);
     wcsncpy_s(data.szInfo, text.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &data);

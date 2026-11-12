@@ -45,6 +45,7 @@ const state = {
   hubLatest: null,
   startup: false,  // starts with Windows and stays in the notification area
   hidden: false,   // started hidden by Windows
+  group: false,    // groups the icons of the apps inside its own
   backupMessage: null,
 };
 
@@ -66,6 +67,7 @@ if (host) {
         state.hubVersion = message.version;
         state.startup = message.startup === '1';
         state.hidden = message.hidden === '1';
+        state.group = message.group === '1';
         $('brand-version').textContent = `v${message.version}`;
         renderBanner();
         if (state.view === 'settings') renderSettings();
@@ -104,6 +106,10 @@ if (host) {
         scheduleChecks();
         renderSettings();
         break;
+      case 'group':
+        state.group = message.enabled === '1';
+        renderSettings();
+        break;
       case 'backupDone':
       case 'restoreDone':
         if (message.cancelled === '1') state.backupMessage = null;
@@ -135,7 +141,7 @@ function refreshInstalled() {
 function sendHostStrings() {
   send({
     type: 'strings', closeBusy: t('closeBusy'), trayOpen: t('trayOpen'), trayCheck: t('trayCheck'), trayQuit: t('trayQuit'),
-    trayTip: trayTip(),
+    trayTip: trayTip(), groupHint: t('groupHint'),
   });
 }
 
@@ -1012,6 +1018,13 @@ function renderSettings() {
       writeSettings();
       renderSettings();
     })),
+    el('h2', { class: 'section-title' }, t('groupSection')),
+    settingRow('group', t('group'), t('groupText'), settingSwitch('group', state.group, false, () => {
+      send({ type: 'group', enabled: state.group ? '0' : '1' });
+    })),
+    el('div', { class: 'setting' },
+      el('div', {}, el('strong', {}, t('groupHow')),
+        el('ul', { class: 'setting-list' }, ['groupHow1', 'groupHow2', 'groupHow3', 'groupHow4'].map((key) => el('li', {}, t(key)))))),
     el('h2', { class: 'section-title' }, t('backupSection')),
     el('div', { class: 'setting' },
       el('div', {}, el('span', {}, t('backupText')), message),

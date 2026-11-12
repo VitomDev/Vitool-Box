@@ -29,11 +29,12 @@ target_link_libraries(vitoolcore PUBLIC advapi32 shell32 ole32 winhttp bcrypt)
 add_executable(VitoolBox WIN32
     src/app/hub_window.cpp
     src/app/main.cpp
+    src/app/tray_group.cpp
     src/app/update_window.cpp
     src/app/VitoolBox.rc
 )
 target_include_directories(VitoolBox SYSTEM PRIVATE ${VITOOL_WEBVIEW2_SDK}/build/native/include)
-target_link_libraries(VitoolBox PRIVATE vitoolcore user32 gdi32 gdiplus dwmapi version uuid
+target_link_libraries(VitoolBox PRIVATE vitoolcore user32 gdi32 gdiplus dwmapi shcore version uuid
     ${VITOOL_WEBVIEW2_SDK}/build/native/x64/WebView2LoaderStatic.lib)
 # The manifest is embedded through VitoolBox.rc.
 target_link_options(VitoolBox PRIVATE /MANIFEST:NO)
