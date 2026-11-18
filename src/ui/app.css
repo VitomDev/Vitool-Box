@@ -111,6 +111,9 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   gap: 12px;
 }
 .banner.warning { background: var(--warning-soft); }
+.badge.early { background: var(--warning-soft); color: var(--warning); }
+.early-notice { margin: 0 0 20px; }
+.card-version { white-space: nowrap; }
 .banner span { flex: 1; }
 
 main { flex: 1; overflow-y: auto; padding: 20px 24px 32px; }

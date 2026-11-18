@@ -400,6 +400,11 @@ function statusOf(app) {
   return compareVersions(app.version, installed.version) > 0 ? 'update' : 'installed';
 }
 
+// Before 1.0 an app is still taking shape: it may change and have bugs.
+function isEarly(app) {
+  return Boolean(app.version) && compareVersions(app.version, '1.0.0') < 0;
+}
+
 function isNew(app) {
   return Boolean(app.createdAt) && Date.now() - new Date(app.createdAt).getTime() < NEW_DAYS * 86400000;
 }
@@ -452,6 +457,10 @@ function stop(handler) {
 function install(app, options = {}) {
   const asset = options.release ? options.release.asset : app.asset;
   if (!asset || state.busy[app.appId]) return;
+  if (isEarly(app) && !options.confirmed && !options.earlyOk && !state.installed[app.appId]) {
+    confirmDialog(t('earlyTitle', { name: app.name }), t('earlyText'), t('install'), () => install(app, { ...options, earlyOk: true }), false);
+    return;
+  }
   if (app.admin && !options.confirmed && !state.installed[app.appId]) {
     confirmDialog(t('adminTitle'), t('adminText', { name: app.name }), t('continue'), () => install(app, { ...options, confirmed: true }), false);
     return;
@@ -745,8 +754,9 @@ function renderGrid() {
     onclick: () => (state.selecting ? toggleSelection(app) : showDetail(app.repo)),
   },
   el('div', { class: 'card-head' }, appIcon(app),
-    el('div', {}, el('h3', {}, app.name, isNew(app) ? el('span', { class: 'badge' }, t('new')) : null),
-      el('div', { class: 'category' }, categoryName(app.category)))),
+    el('div', {}, el('h3', {}, app.name, isNew(app) ? el('span', { class: 'badge' }, t('new')) : null,
+      isEarly(app) ? el('span', { class: 'badge early', title: t('earlyTitle', { name: app.name }) }, t('earlyBadge')) : null),
+      el('div', { class: 'category' }, categoryName(app.category), app.version ? el('span', { class: 'card-version' }, ` · v${app.version}`) : null))),
   el('p', {}, app.tagline),
   el('div', { class: 'card-foot' }, busyView(app) || cardAction(app), state.selecting ? selectBox(app) : switchButton(app)))));
 
@@ -913,6 +923,9 @@ function renderDetail() {
           el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); send({ type: 'openUrl', url: app.homepage }); } }, t('viewOnGitHub')),
           el('a', { href: '#', class: 'button', onclick: (event) => { event.preventDefault(); openFeedback(app.name); } }, t('reportProblem')))),
       detailActions(app)),
+    isEarly(app) ? el('div', { class: 'banner warning early-notice' },
+      el('span', {}, el('strong', {}, t('earlyTitle', { name: app.name })), ' ', t('earlyText')),
+      el('button', { class: 'button small', onclick: () => openFeedback(app.name) }, t('reportProblem'))) : null,
     app.screenshots.length ? el('div', { class: 'screenshots' }, app.screenshots.map((src) => {
       const image = el('img', { src, alt: t('screenshot', { name: app.name }), loading: 'lazy', onclick: () => openLightbox(src) });
       image.addEventListener('error', () => image.remove());
