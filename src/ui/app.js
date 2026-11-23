@@ -68,6 +68,8 @@ if (host) {
         state.startup = message.startup === '1';
         state.hidden = message.hidden === '1';
         state.group = message.group === '1';
+        // Started again after a self-update that failed: say why on the banner.
+        if (message.updateError) state.errors.hub = message.updateError;
         $('brand-version').textContent = `v${message.version}`;
         renderBanner();
         if (state.view === 'settings') renderSettings();
@@ -512,6 +514,21 @@ function cancel(app) {
   send({ type: 'cancel', appId: app.appId });
 }
 
+// Smart App Control blocks unsigned installers: retrying won't help, so
+// explain it and offer its settings page instead.
+function isSmartAppControl(error) {
+  return String(error || '').split('|')[0] === 'smartAppControl';
+}
+
+function showSmartAppControlHelp() {
+  confirmDialog(t('sacTitle'), t('sacText'), t('sacOpen'), () => send({ type: 'openSmartAppControl' }), false);
+}
+
+// The "How to fix it" link shown after an error, when there is one.
+function errorHelp(error) {
+  return isSmartAppControl(error) ? el('button', { class: 'link-button', onclick: stop(showSmartAppControlHelp) }, t('sacHelp')) : null;
+}
+
 function askToCloseApp(app, action) {
   const last = state.lastAction[app.appId] || {};
   confirmDialog(t('runningTitle', { name: app.name }), t('runningText'), t('runningOk'), () => {
@@ -681,6 +698,9 @@ function statusPill(app) {
 
 // The main action of a card, without opening the app: update, open or retry.
 function cardAction(app) {
+  if (isSmartAppControl(state.errors[app.appId])) {
+    return el('button', { class: 'button small', title: errorText(state.errors[app.appId]), onclick: stop(showSmartAppControlHelp) }, `⚠ ${t('sacBlocked')}`);
+  }
   if (state.errors[app.appId]) {
     return el('button', { class: 'button small', title: errorText(state.errors[app.appId]), onclick: stop(() => retry(app)) }, `⚠ ${t('retry')}`);
   }
@@ -793,7 +813,8 @@ function detailActions(app) {
       statusOf(app) === 'installed' && app.asset ? el('button', { class: 'link-button', onclick: () => install(app, { confirmed: true }) }, t('repair')) : null));
   }
   if (state.errors[app.appId] && !busy) {
-    actions.append(el('div', { class: 'error' }, errorText(state.errors[app.appId]), ' ',
+    const help = errorHelp(state.errors[app.appId]);
+    actions.append(el('div', { class: 'error' }, errorText(state.errors[app.appId]), ' ', help, help ? ' ' : null,
       el('button', { class: 'link-button', onclick: () => retry(app) }, t('retry'))));
   }
   if (!app.asset) actions.append(el('div', { class: 'error' }, t('noVerified')));
@@ -976,7 +997,8 @@ function renderBanner() {
       action = el('button', { class: 'button primary', onclick: () => send({ type: 'openUrl', url: state.hubLatest.url }) }, t('download'));
     }
     banner.replaceChildren(
-      el('span', {}, t('hubAvailable', { v: state.hubLatest.version }), state.errors.hub ? el('span', { class: 'error' }, ` ${errorText(state.errors.hub)}`) : null),
+      el('span', {}, t('hubAvailable', { v: state.hubLatest.version }),
+        state.errors.hub ? el('span', { class: 'error' }, ` ${errorText(state.errors.hub)} `, errorHelp(state.errors.hub)) : null),
       action);
     banner.hidden = false;
   } else {

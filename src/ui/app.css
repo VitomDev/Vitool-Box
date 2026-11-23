@@ -361,7 +361,7 @@ main { flex: 1; overflow-y: auto; padding: 20px 24px 32px; }
 .dialog-backdrop, .lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 10; }
 .dialog { width: min(420px, calc(100vw - 32px)); background: var(--surface); border-radius: 12px; padding: 22px 24px 18px; box-shadow: 0 8px 32px rgba(0, 0, 0, .3); }
 .dialog h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
-.dialog p { margin: 0 0 20px; color: var(--text-muted); }
+.dialog p { margin: 0 0 20px; color: var(--text-muted); white-space: pre-line; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .lightbox { cursor: zoom-out; }
 .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 8px; }

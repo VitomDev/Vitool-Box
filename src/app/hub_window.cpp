@@ -4,6 +4,7 @@
 #include <shobjidl.h>
 
 #include <cmath>
+#include <cwctype>
 #include <thread>
 #include <vector>
 
@@ -152,9 +153,16 @@ bool NewHubIsRunning() {
 
 }  // namespace
 
-bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex) {
+bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex, std::wstring_view commandLine) {
     CleanDownloads();
     instanceMutex_ = instanceMutex;
+    if (const auto at = commandLine.find(kUpdateErrorArgument); at != std::wstring_view::npos) {
+        // Only an error key such as "smartAppControl" or "installerCode|5".
+        for (const wchar_t c : commandLine.substr(at + wcslen(kUpdateErrorArgument))) {
+            if (!iswalnum(c) && c != L'|') break;
+            updateError_ += static_cast<char>(c);
+        }
+    }
     // Left behind by the last self-update.
     std::error_code ignored;
     std::filesystem::remove(MovedExecutable(), ignored);
@@ -291,9 +299,11 @@ LRESULT HubWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             InstallSelfUpdate(*setup);
             return 0;
         }
-        case WM_APP_UPDATE_INSTALLED:
-            FinishSelfUpdate(wParam != 0);
+        case WM_APP_UPDATE_INSTALLED: {
+            std::unique_ptr<std::wstring> error(reinterpret_cast<std::wstring*>(lParam));
+            FinishSelfUpdate(wParam != 0, error ? *error : std::wstring());
             return 0;
+        }
         case WM_CLOSE:
             if (keepInTray_ || groupIcons_) {
                 ShowWindow(window_, SW_HIDE);
@@ -428,7 +438,12 @@ void HubWindow::OnWebMessage(const std::string& json) {
 
     if (type == "hello") {
         Post(R"({"type":"hello","version":)" + JsonQuote(VITOOL_VERSION_STRING) + R"(,"startup":)" + JsonQuote(keepInTray_ ? "1" : "0") +
-             R"(,"hidden":)" + JsonQuote(startedHidden_ ? "1" : "0") + R"(,"group":)" + JsonQuote(groupIcons_ ? "1" : "0") + "}");
+             R"(,"hidden":)" + JsonQuote(startedHidden_ ? "1" : "0") + R"(,"group":)" + JsonQuote(groupIcons_ ? "1" : "0") +
+             R"(,"updateError":)" + JsonQuote(updateError_) + "}");
+        updateError_.clear();
+    } else if (type == "openSmartAppControl") {
+        // Windows Security, on the Smart App Control page.
+        ShellExecuteW(window_, L"open", L"windowsdefender://smartapp", nullptr, nullptr, SW_SHOWNORMAL);
     } else if (type == "strings") {
         for (const char* key : {"closeBusy", "trayOpen", "trayCheck", "trayQuit", "trayTip", "groupHint"}) strings_[key] = Utf8ToWide(Field(*message, key));
         trayGroup_.SetTexts(strings_["trayOpen"], strings_["groupHint"]);
@@ -595,12 +610,13 @@ void HubWindow::InstallSelfUpdate(const std::filesystem::path& setup) {
     MoveFileExW(OwnExecutable().c_str(), MovedExecutable().c_str(), MOVEFILE_REPLACE_EXISTING);
     HWND window = window_;
     std::thread([=] {
-        const bool installed = RunSelfUpdate(setup).empty();
-        PostMessageW(window, WM_APP_UPDATE_INSTALLED, installed ? 1 : 0, 0);
+        const auto error = RunSelfUpdate(setup);
+        PostMessageW(window, WM_APP_UPDATE_INSTALLED, error.empty() ? 1 : 0,
+                     error.empty() ? 0 : reinterpret_cast<LPARAM>(new std::wstring(error)));
     }).detach();
 }
 
-void HubWindow::FinishSelfUpdate(bool installed) {
+void HubWindow::FinishSelfUpdate(bool installed, const std::wstring& error) {
     if (webView_) {
         // The download failed: nothing was touched, carry on.
         updateWindow_.Close();
@@ -610,10 +626,12 @@ void HubWindow::FinishSelfUpdate(bool installed) {
     if (installed) {
         updateWindow_.SetProgress(100, strings_["updOpen"]);
     } else {
-        // Put the old version back and start it again.
+        // Put the old version back and start it again, telling it why so its
+        // banner can explain (Smart App Control, for one, blocks the installer).
         std::error_code ignored;
         if (!std::filesystem::exists(OwnExecutable(), ignored)) MoveFileExW(MovedExecutable().c_str(), OwnExecutable().c_str(), 0);
-        ShellExecuteW(nullptr, L"open", OwnExecutable().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        const std::wstring arguments = std::wstring(kUpdateErrorArgument) + (error.empty() ? L"installerStart" : error);
+        ShellExecuteW(nullptr, L"open", OwnExecutable().c_str(), arguments.c_str(), nullptr, SW_SHOWNORMAL);
     }
     HWND window = window_;
     std::thread([=] {
