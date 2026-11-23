@@ -167,6 +167,8 @@ The first version works; more features are on the way.
 
 [MIT](LICENSE) © VitomDev
 
+The names and logos are not covered by the license: see [TRADEMARKS.md](TRADEMARKS.md). 💸 Vitool Box is free: if you paid for it, you were scammed. Get it only from GitHub or Vitool Box.
+
 ---
 
 ## 📲 Contact
