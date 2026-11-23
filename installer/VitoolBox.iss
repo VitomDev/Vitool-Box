@@ -5,7 +5,7 @@
 ;
 ; Built by build.ps1, which passes /DBuildDir=<folder with VitoolBox.exe>.
 
-#define AppVersion "1.2.5"
+#define AppVersion "1.2.6"
 #define AppName "Vitool Box"
 
 #ifndef BuildDir
