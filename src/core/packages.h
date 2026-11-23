@@ -29,6 +29,16 @@ std::filesystem::path UninstallerFromCommand(std::wstring_view command);
 
 std::optional<InstalledApp> FindInstalled(std::wstring_view appId);
 
+// Windows 11's Smart App Control, which only lets signed or well-known
+// programs run (our installers aren't signed yet).
+enum class SmartAppControl { Off, On, Evaluation, Unknown };
+SmartAppControl SmartAppControlState();
+// The error key for an installer Windows would not start: "noAdmin" when the
+// UAC prompt was declined, "smartAppControl" when Smart App Control is on,
+// "appControl|code" for another application control policy (Code Integrity)
+// and "installerStart|code" for anything else.
+std::wstring LaunchErrorKey(unsigned long error, SmartAppControl state);
+
 // Each returns an empty string on success, otherwise an error key for the UI.
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,
                         const DownloadProgress& progress);

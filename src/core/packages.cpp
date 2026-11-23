@@ -29,8 +29,8 @@ std::wstring RunAndWait(const std::filesystem::path& program, const wchar_t* arg
     info.lpParameters = arguments;
     info.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&info) || !info.hProcess) {
-        if (GetLastError() == ERROR_CANCELLED) return L"noAdmin";
-        return L"installerStart";
+        const DWORD error = GetLastError();
+        return LaunchErrorKey(error, SmartAppControlState());
     }
     WaitForSingleObject(info.hProcess, INFINITE);
     GetExitCodeProcess(info.hProcess, &exitCode);
@@ -132,6 +132,34 @@ std::optional<InstalledApp> FindInstalled(std::wstring_view appId) {
         return app;
     }
     return std::nullopt;
+}
+
+SmartAppControl SmartAppControlState() {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"VerifiedAndReputablePolicyState",
+                     RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
+        return SmartAppControl::Unknown;  // Windows 10, or Windows 11 before 22H2.
+    }
+    switch (value) {
+        case 0: return SmartAppControl::Off;
+        case 1: return SmartAppControl::On;
+        case 2: return SmartAppControl::Evaluation;
+        default: return SmartAppControl::Unknown;
+    }
+}
+
+std::wstring LaunchErrorKey(unsigned long error, SmartAppControl state) {
+    if (error == ERROR_CANCELLED) return L"noAdmin";
+    // Code Integrity refuses the file: Smart App Control or another
+    // application control policy (both blocks are logged as events 3033/3077).
+    const bool codeIntegrity = error == ERROR_INVALID_IMAGE_HASH ||
+                               (error >= ERROR_SYSTEM_INTEGRITY_ROLLBACK_DETECTED &&
+                                error <= ERROR_SYSTEM_INTEGRITY_REPUTATION_EXPLICIT_DENY_FILE);
+    // With Smart App Control on, any other failure to start is almost always it too.
+    if (state == SmartAppControl::On) return L"smartAppControl";
+    if (codeIntegrity) return L"appControl|" + std::to_wstring(error);
+    return L"installerStart|" + std::to_wstring(error);
 }
 
 std::wstring InstallApp(std::wstring_view appId, const std::wstring& url, const std::string& sha256, std::wstring_view fileName,

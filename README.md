@@ -44,6 +44,14 @@ Download `VitoolBoxSetup.exe` from [Releases](https://github.com/VitomDev/Vitool
 
 Uninstalling Vitool Box (Settings → Apps) keeps the apps you installed with it.
 
+### 🛡️ "Windows blocked the installer" (Smart App Control)
+
+Vitool Box and its apps are not code-signed yet. On PCs with **Smart App Control** turned on (some fresh Windows 11 installs), Windows refuses to run unsigned installers, and Vitool Box tells you when that is why an install or update failed. It is not a virus: every download comes from the official GitHub release and is checked against its SHA-256.
+
+To install the apps anyway: **Windows Security → App & browser control → Smart App Control settings → Off** (Vitool Box's **How to fix it** button opens that page). Windows does not let you turn it back on without resetting the PC; Microsoft Defender and SmartScreen keep protecting you.
+
+Without Smart App Control, SmartScreen may show "Windows protected your PC" the first time: **More info → Run anyway**.
+
 ---
 
 ## 🖱️ Usage

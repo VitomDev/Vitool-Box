@@ -50,6 +50,19 @@ struct Failure {
         if (!(condition)) throw Failure{std::string(#condition) + " (line " + std::to_string(__LINE__) + ")"}; \
     } while (false)
 
+TEST(LaunchErrorsExplainSmartAppControl) {
+    // A declined UAC prompt is never blamed on Smart App Control.
+    CHECK(LaunchErrorKey(ERROR_CANCELLED, SmartAppControl::On) == L"noAdmin");
+    CHECK(LaunchErrorKey(ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION, SmartAppControl::On) == L"smartAppControl");
+    CHECK(LaunchErrorKey(ERROR_INVALID_IMAGE_HASH, SmartAppControl::On) == L"smartAppControl");
+    CHECK(LaunchErrorKey(ERROR_ACCESS_DENIED, SmartAppControl::On) == L"smartAppControl");
+    // Off, in evaluation or not on this Windows: another policy, or something else.
+    CHECK(LaunchErrorKey(ERROR_SYSTEM_INTEGRITY_REPUTATION_UNFRIENDLY_FILE, SmartAppControl::Off) == L"appControl|4580");
+    CHECK(LaunchErrorKey(ERROR_INVALID_IMAGE_HASH, SmartAppControl::Unknown) == L"appControl|577");
+    CHECK(LaunchErrorKey(ERROR_ACCESS_DENIED, SmartAppControl::Evaluation) == L"installerStart|5");
+    CHECK(LaunchErrorKey(ERROR_FILE_NOT_FOUND, SmartAppControl::Off) == L"installerStart|2");
+}
+
 TEST(JsonParsesFlatObjects) {
     const auto object = ParseFlatObject(R"( {"type": "install", "url":"https:\/\/x", "name":"caf\u00e9 \ud83d\ude00", "empty":""} )");
     CHECK(object.has_value());

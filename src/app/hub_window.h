@@ -27,9 +27,12 @@ public:
     // Sent by a second instance to bring this one to the front.
     static constexpr UINT kShowMessage = WM_APP + 10;
 
+    // Given by a self-update that failed to the old version it starts again.
+    static constexpr wchar_t kUpdateErrorArgument[] = L"--update-error=";
+
     // hidden: started with Windows, only the notification area icon shows.
     // Takes the single-instance mutex: a self-update lets go of it early.
-    bool Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex);
+    bool Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex, std::wstring_view commandLine);
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
@@ -45,7 +48,7 @@ private:
     void StartOperation(const JsonObject& message, bool install);
     void StartSelfUpdateOperation(std::wstring url, std::string sha256, std::wstring fileName);
     void InstallSelfUpdate(const std::filesystem::path& setup);
-    void FinishSelfUpdate(bool installed);
+    void FinishSelfUpdate(bool installed, const std::wstring& error);
     void StartBackup(const std::string& spec, bool restore);
 
     void SetTrayVisible(bool visible);
@@ -66,6 +69,7 @@ private:
     bool groupIcons_ = false;   // también se queda en segundo plano
     bool trayVisible_ = false;
     int updateCount_ = 0;
+    std::string updateError_;   // why the last self-update failed, for the UI
     int runningOperations_ = 0;
     UINT taskbarCreated_ = 0;
     HICON icon_ = nullptr;
