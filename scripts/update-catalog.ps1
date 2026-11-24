@@ -67,11 +67,21 @@ Remove-Item $scratch
 Write-Host "catalog.json: $($apps.Count) apps"
 
 if ($Publish) {
-    git -C $root add catalog.json
+    # git prints its progress on stderr ("To https://github.com/..."). When this
+    # script's output is redirected, Windows PowerShell turns those lines into
+    # errors and 'Stop' would end the script before the website rebuild. Only
+    # git's exit code decides whether it failed.
+    function Invoke-Git {
+        $ErrorActionPreference = 'Continue'
+        & git -C $root @args 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0) { throw "git $($args[0]) failed with exit code $LASTEXITCODE" }
+    }
+
+    Invoke-Git add catalog.json
     git -C $root diff --cached --quiet -- catalog.json
     if ($LASTEXITCODE -eq 0) { Write-Host 'catalog.json is unchanged'; return }
-    git -C $root commit -m 'Update catalog' -- catalog.json
-    git -C $root push
+    Invoke-Git commit -m 'Update catalog' -- catalog.json
+    Invoke-Git push
 
     # Rebuild the website (vitoolbox.vitom.dev) so it shows the new versions.
     # The Vercel deploy hook URL is private: it lives in a user environment
