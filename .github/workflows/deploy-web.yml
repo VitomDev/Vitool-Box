@@ -1,0 +1,33 @@
+# Rebuilds the website (vitoolbox.vitom.dev) whenever a new catalog.json is
+# pushed, so it shows the new versions. The Vercel deploy hook URL is the
+# repository secret VITOOLBOX_WEB_DEPLOY_HOOK: it never appears in this public
+# repository or in the logs. Without the secret, the job just says so.
+
+name: Rebuild website
+
+on:
+  push:
+    branches: [main]
+    paths: [catalog.json]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  deploy-hook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call the Vercel deploy hook
+        env:
+          HOOK: ${{ secrets.VITOOLBOX_WEB_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning::The VITOOLBOX_WEB_DEPLOY_HOOK secret is not set; the website was not rebuilt."
+            exit 0
+          fi
+          # The website reads catalog.json from GitHub while it builds: give
+          # GitHub a moment to serve the new file first.
+          sleep 90
+          curl --fail --silent --show-error -X POST "$HOOK" > /dev/null
+          echo "Website rebuild requested."
