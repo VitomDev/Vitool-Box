@@ -18,6 +18,6 @@ The code in this repository is released under the [MIT License](LICENSE). That l
 
 ## 💸 The apps are free
 
-Every VitomDev app is free and open source, and is only published at [github.com/VitomDev](https://github.com/VitomDev) and through [Vitool Box](https://github.com/VitomDev/Vitool-Box). If you paid for one, you were scammed. Please report it in the app's GitHub issues.
+Every VitomDev VitoolBox app is free and open source, and is only published at [github.com/VitomDev](https://github.com/VitomDev) and through [Vitool Box](https://github.com/VitomDev/Vitool-Box). If you paid for one, you were scammed. Please report it in the app's GitHub issues.
 
 For any other use of the names or logos, ask first at [github.com/VitomDev](https://github.com/VitomDev).
