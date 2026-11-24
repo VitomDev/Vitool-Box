@@ -72,4 +72,17 @@ if ($Publish) {
     if ($LASTEXITCODE -eq 0) { Write-Host 'catalog.json is unchanged'; return }
     git -C $root commit -m 'Update catalog' -- catalog.json
     git -C $root push
+
+    # Rebuild the website (vitoolbox.vitom.dev) so it shows the new versions.
+    # The Vercel deploy hook URL is private: it lives in a user environment
+    # variable on this PC, never in this public repository. Without it, skip.
+    # The request goes out 90 s later from a hidden process, once GitHub serves
+    # the new catalog.json, without keeping this window waiting.
+    $hook = $env:VITOOLBOX_WEB_DEPLOY_HOOK
+    if (-not $hook) { $hook = [Environment]::GetEnvironmentVariable('VITOOLBOX_WEB_DEPLOY_HOOK', 'User') }
+    if ($hook) {
+        $command = "Start-Sleep -Seconds 90; Invoke-RestMethod -Method Post -Uri '$hook' | Out-Null"
+        Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', $command
+        Write-Host 'Website rebuild requested (in 90 s)'
+    }
 }
