@@ -13,4 +13,7 @@ bool SetStartWithWindows(bool enabled);
 bool GroupsTrayIcons();
 bool SetGroupTrayIcons(bool enabled);
 
+// The first time Vitool Box runs, turns on Start with Windows and grouping.
+void ApplyFirstRunDefaults();
+
 }  // namespace vitool

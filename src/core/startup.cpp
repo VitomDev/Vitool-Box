@@ -11,6 +11,7 @@ constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Ru
 constexpr wchar_t kValueName[] = L"Vitool Box";
 constexpr wchar_t kSettingsKey[] = L"Software\\VitomDev\\Vitool Box";
 constexpr wchar_t kGroupValue[] = L"GroupTrayIcons";
+constexpr wchar_t kDefaultsValue[] = L"DefaultsApplied";
 
 }  // namespace
 
@@ -40,6 +41,20 @@ bool GroupsTrayIcons() {
 bool SetGroupTrayIcons(bool enabled) {
     const DWORD value = enabled ? 1 : 0;
     return RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, kGroupValue, REG_DWORD, &value, sizeof(value)) == ERROR_SUCCESS;
+}
+
+void ApplyFirstRunDefaults() {
+    DWORD applied = 0;
+    DWORD size = sizeof(applied);
+    if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, kDefaultsValue, RRF_RT_REG_DWORD, nullptr, &applied, &size) ==
+        ERROR_SUCCESS) {
+        return;
+    }
+    // Both on by default; the user can turn them off in the settings.
+    SetStartWithWindows(true);
+    SetGroupTrayIcons(true);
+    const DWORD value = 1;
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, kDefaultsValue, REG_DWORD, &value, sizeof(value));
 }
 
 }  // namespace vitool

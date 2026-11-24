@@ -17,7 +17,7 @@ Browse the apps, read what each one does, and turn on the ones you want: Vitool 
 - ☑️ **Install several at once**: pick them and they install one after another
 - ⬆️ **Updates**: update with one click right from the app list, or all at once
 - 🔔 **Update notifications**: starts with Windows, waits in the notification area and lets you know when there are updates
-- 🗃️ **Group your apps' icons** (optional, off by default): one Vitool Box icon next to the clock instead of one per app; click an app to use it, right-click for its menu
+- 🗃️ **Group your apps' icons** (on by default): one Vitool Box icon next to the clock instead of one per app; click an app to use it, right-click for its menu
 - 🕰️ **Version history**: read the notes of every release and go back to an older version if a new one gives you trouble
 - 🔄 **Updates itself**: Vitool Box downloads its new version and restarts into it
 - 🤖 **Optional auto-update**: install your apps' updates every time you open Vitool Box
@@ -73,7 +73,7 @@ Without Smart App Control, SmartScreen may show "Windows protected your PC" the 
 ### ⚙️ Settings
 
 - **Language**: the same as Windows, or any of the 10 languages
-- **Start with Windows** (off by default): keeps Vitool Box in the notification area and checks for updates every few hours. Closing the window hides it there; **Quit** is in the icon's menu
+- **Start with Windows** (on by default): keeps Vitool Box in the notification area and checks for updates every few hours. Closing the window hides it there; **Quit** is in the icon's menu
 - **Update notifications** (on with Start with Windows): a Windows notification when your apps have updates. The icon also gets a dot
 - **Update everything when Vitool Box opens** (off by default): installs your apps' updates each time you open Vitool Box. Vitool Box itself is always updated by hand, from its banner
 - **Settings backup**: **Back up…** saves the settings of your apps to a `.zip`; **Restore…** puts them back (open apps are closed and started again)

@@ -5,7 +5,7 @@
 ;
 ; Built by build.ps1, which passes /DBuildDir=<folder with VitoolBox.exe>.
 
-#define AppVersion "1.2.6"
+#define AppVersion "1.2.7"
 #define AppName "Vitool Box"
 
 #ifndef BuildDir
@@ -57,7 +57,7 @@ Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Type: filesandordirs; Name: "{app}\ui"
 
 [Registry]
-; "Start with Windows" is turned on from Vitool Box's settings.
+; "Start with Windows" is turned on by Vitool Box on its first run (and from its settings).
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Vitool Box"; Flags: uninsdeletevalue dontcreatekey
 
 [Icons]

@@ -168,6 +168,7 @@ bool HubWindow::Create(HINSTANCE instance, bool hidden, HANDLE instanceMutex, st
     std::filesystem::remove(MovedExecutable(), ignored);
     instance_ = instance;
     startedHidden_ = hidden;
+    ApplyFirstRunDefaults();
     keepInTray_ = StartsWithWindows();
     groupIcons_ = GroupsTrayIcons();
     trayGroup_.onBalloon = [this](const std::wstring& title, const std::wstring& text, DWORD flags, HICON icon) {
